@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import ConfigParser
+import configparser
 import random
 import sys
 import time
@@ -10,13 +10,8 @@ import pygame, pygame.locals
 
 from terrain.generator import terrain_generator
 
-if not pygame.font: print 'Warning, fonts disabled'
-
-try:
-    import psyco
-    psyco.full()
-except ImportError:
-    pass
+if not pygame.font:
+    print('Warning, fonts disabled')
 
 
 def get_mind(name):
@@ -59,7 +54,7 @@ SPAWN_TOTAL_ENERGY = BODY_ENERGY + SPAWN_LOST_ENERGY
 
 TIMEOUT = None
 
-config = ConfigParser.RawConfigParser()
+config = configparser.RawConfigParser()
 
 
 def get_next_move(old_x, old_y, x, y):
@@ -104,8 +99,8 @@ class Game(object):
         else:
             self.n_plants = 14
             
-        # Add some randomly placed plants to the map. 
-        for x in xrange(self.n_plants):
+        # Add some randomly placed plants to the map.
+        for x in range(self.n_plants):
             mx = random.randrange(1, self.width - 1)
             my = random.randrange(1, self.height - 1)
             eff = random.randrange(PLANT_MIN_OUTPUT, PLANT_MAX_OUTPUT)
@@ -120,7 +115,7 @@ class Game(object):
 
         # Create an agent for each mind and place on map at a different plant.
         self.agent_map.lock()
-        for idx in xrange(len(self.minds)):
+        for idx in range(len(self.minds)):
             # BUG: Number of minds could exceed number of plants?
             (mx, my) = self.plant_population[idx].get_pos()
             fuzzed_x = mx
@@ -296,12 +291,12 @@ class Game(object):
         
         if alive == 1:
             colors = ["red", "white", "purple", "yellow"]
-            print "Winner is %s (%s) in %s" % (self.mind_list[winner][1].name, 
-                                                colors[winner], str(self.time))
+            print("Winner is %s (%s) in %s" % (self.mind_list[winner][1].name,
+                                                colors[winner], str(self.time)))
             self.winner = winner
         
         if alive == 0 or (self.max_time > 0 and self.time > self.max_time):
-            print "It's a draw!"
+            print("It's a draw!")
             self.winner = -1
 
         self.agent_map.unlock()
@@ -322,8 +317,8 @@ class Game(object):
                          self.show_agents = not self.show_agents
                 elif event.type == pygame.locals.MOUSEBUTTONUP:
                     if event.button == 1:
-                        print self.agent_map.get(event.pos[0]/2,
-                                                 event.pos[1]/2)
+                        print(self.agent_map.get(event.pos[0] // 2,
+                                                 event.pos[1] // 2))
                 elif event.type == pygame.QUIT:
                     sys.exit()
             self.disp.update(self.terr, self.agent_population,
@@ -349,7 +344,7 @@ class Game(object):
         self.tic = time.time()
         self.clock.tick()
         if self.time % 100 == 0:
-            print 'FPS: %f' % self.clock.get_fps()
+            print('FPS: %f' % self.clock.get_fps())
 
 
 class MapLayer(object):
@@ -436,8 +431,8 @@ class ObjectMapLayer(MapLayer):
 
     def get_view(self, x, y, r):
         ret = []
-        for x_off in xrange(-r, r + 1):
-            for y_off in xrange(-r, r + 1):
+        for x_off in range(-r, r + 1):
+            for y_off in range(-r, r + 1):
                 if x_off == 0 and y_off == 0:
                     continue
                 a = self.get(x + x_off, y + y_off)
@@ -463,9 +458,7 @@ class ObjectMapLayer(MapLayer):
 # Otherwise, don't bother folks about it.
 try:
     import cells_helpers
-    import types
-    ObjectMapLayer.get_small_view_fast = types.MethodType(
-        cells_helpers.get_small_view_fast, None, ObjectMapLayer)
+    ObjectMapLayer.get_small_view_fast = cells_helpers.get_small_view_fast
 except ImportError:
     pass
 
@@ -643,12 +636,12 @@ class Display(object):
             #todo: find out how many teams are playing
             team_pop = [0] * nteams
 
-            for team in xrange(nteams):
+            for team in range(nteams):
                 team_pop[team] = sum(1 for a in pop if a.team == team)
 
             self.text = []
             drawTop = 0
-            for t in xrange(nteams):
+            for t in range(nteams):
                 drawTop += 20
                 self.show_text(str(team_pop[t]), TEAM_COLORS[t], (10, drawTop))
 
@@ -709,14 +702,14 @@ def main():
         symmetric = config.getboolean('terrain', 'symmetric')
         minds_str = str(config.get('minds', 'minds'))
     except Exception as e:
-        print 'Got error: %s' % e
+        print('Got error: %s' % e)
         config.add_section('minds')
         config.set('minds', 'minds', 'mind1,mind2')
         config.add_section('terrain')
         config.set('terrain', 'bounds', '300')
         config.set('terrain', 'symmetric', 'true')
 
-        with open('default.cfg', 'wb') as configfile:
+        with open('default.cfg', 'w') as configfile:
             config.write(configfile)
 
         config.read('default.cfg')
