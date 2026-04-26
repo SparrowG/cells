@@ -32,14 +32,14 @@ method, but remember, when calling another method to determine what
 action to take, you must have a chain of return statements leading all
 the way back to the AgentMind.act method.
 
-If you don't you'll get a an error that looks like this:
+If you don't you'll get an error that looks like this:
 
 Traceback (most recent call last):
-  File "cells.py", line 570, in <module>
+  File "cells.py", in <module>
     game.tick()
-  File "cells.py", line 242, in tick
+  File "cells.py", in tick
     self.run_agents()
-  File "cells.py", line 158, in run_agents
+  File "cells.py", in run_agents
     if action.type == ACT_MOVE: # Changes position of agent.
 AttributeError: 'NoneType' object has no attribute 'type'
 

@@ -1,21 +1,36 @@
-Cells is a multi agent programing game written in Python.
+Cells is a multi-agent programming game written in Python.
 
-For more information see: http://phonons.wordpress.com/2010/06/01/cells-a-massively-multi-agent-python-programming-game/
+For background see: http://phonons.wordpress.com/2010/06/01/cells-a-massively-multi-agent-python-programming-game/
 
-Join #pycells on irc.freenode.net to discuss Cells
+Requirements: Python 3.11+, numpy, pygame.
 
-Requirements:
-pygame
-numpy
+Install:
+    pip install -r requirements.txt
 
-Optional:
-psyco
+Run a game with a display:
+    python cells.py mind1 mind2
 
-To run:
-python cells.py <program1> ... <programN> 
+Run headless (no window, exits after one game):
+    python cells.py --headless --max-time 200 mind1 mind2
 
-For example:
+Run a round-robin tournament (writes scores.csv):
+    python tournament.py mind1 mind2 mind3
 
-python cells.py mind1 mind2
+Hotkeys (display mode):
+    space   restart the game
+    q       quit
+    e       toggle the energy overlay
+    a       toggle the agent overlay
+    click   print the agent at the clicked cell
 
-For available minds, look in the minds/ folder. Also place your custom minds there.
+For the mind authoring API, see DOCUMENTATION. For tournament rules, see CHEATING.
+
+For available minds, look in the minds/ folder. Place your custom mind there as
+a Python module that exposes an AgentMind class.
+
+Optional Cython speedup (engine has a pure-Python fallback):
+    pip install -r requirements-dev.txt
+    python setup.py build_ext --inplace
+
+Tests:
+    SDL_VIDEODRIVER=dummy python -m pytest -v
