@@ -303,22 +303,21 @@ class Game(object):
         
     def tick(self):
         if not self.headless:
-            # Space starts new game
-            # q or close button will quit the game
+            scale = self.disp.scale
             for event in pygame.event.get():
                 if event.type == pygame.locals.KEYUP:
                     if event.key == pygame.locals.K_SPACE:
                         self.winner = -1
                     elif event.key == pygame.locals.K_q:
-                         sys.exit()
+                        sys.exit()
                     elif event.key == pygame.locals.K_e:
-                         self.show_energy = not self.show_energy
+                        self.show_energy = not self.show_energy
                     elif event.key == pygame.locals.K_a:
-                         self.show_agents = not self.show_agents
+                        self.show_agents = not self.show_agents
                 elif event.type == pygame.locals.MOUSEBUTTONUP:
                     if event.button == 1:
-                        print(self.agent_map.get(event.pos[0] // 2,
-                                                 event.pos[1] // 2))
+                        print(self.agent_map.get(event.pos[0] // scale,
+                                                 event.pos[1] // scale))
                 elif event.type == pygame.QUIT:
                     sys.exit()
             self.disp.update(self.terr, self.agent_population,
@@ -326,13 +325,6 @@ class Game(object):
                              self.plant_map, self.energy_map, self.time,
                              len(self.minds), self.show_energy,
                              self.show_agents)
-            
-            # test for spacebar pressed - if yes, restart
-            for event in pygame.event.get(pygame.locals.KEYUP):
-                if event.key == pygame.locals.K_SPACE:
-                    self.winner = -1
-            if pygame.event.get(pygame.locals.QUIT):
-                sys.exit()
             pygame.event.pump()
             self.disp.flip()
 
