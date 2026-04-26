@@ -62,27 +62,27 @@ def test_display_update_and_flip_run(display_game):
     display_game.disp.flip()
 
 
-def test_space_key_resets_winner(display_game):
+async def test_space_key_resets_winner(display_game):
     pygame.event.post(pygame.event.Event(pygame.KEYUP, {"key": pygame.K_SPACE}))
-    display_game.tick()
+    await display_game.tick()
     assert display_game.winner == -1
 
 
-def test_e_key_toggles_show_energy(display_game):
+async def test_e_key_toggles_show_energy(display_game):
     initial = display_game.show_energy
     pygame.event.post(pygame.event.Event(pygame.KEYUP, {"key": pygame.K_e}))
-    display_game.tick()
+    await display_game.tick()
     assert display_game.show_energy != initial
 
 
-def test_a_key_toggles_show_agents(display_game):
+async def test_a_key_toggles_show_agents(display_game):
     initial = display_game.show_agents
     pygame.event.post(pygame.event.Event(pygame.KEYUP, {"key": pygame.K_a}))
-    display_game.tick()
+    await display_game.tick()
     assert display_game.show_agents != initial
 
 
-def test_left_click_uses_display_scale_for_lookup(display_game, capfd):
+async def test_left_click_uses_display_scale_for_lookup(display_game, capfd):
     """Click at scaled coords (10, 10) should look up cell (5, 5) given scale=2."""
     pygame.event.post(
         pygame.event.Event(
@@ -90,27 +90,27 @@ def test_left_click_uses_display_scale_for_lookup(display_game, capfd):
             {"button": 1, "pos": (10, 10)},
         )
     )
-    display_game.tick()
+    await display_game.tick()
     out, _ = capfd.readouterr()
     # Either prints "None" (empty cell) or "Agent from team ...".
     assert "None" in out or "Agent from team" in out
 
 
-def test_quit_key_q_calls_sys_exit(display_game):
+async def test_quit_key_q_calls_sys_exit(display_game):
     pygame.event.post(pygame.event.Event(pygame.KEYUP, {"key": pygame.K_q}))
     with pytest.raises(SystemExit):
-        display_game.tick()
+        await display_game.tick()
 
 
-def test_quit_event_calls_sys_exit(display_game):
+async def test_quit_event_calls_sys_exit(display_game):
     pygame.event.post(pygame.event.Event(pygame.QUIT))
     with pytest.raises(SystemExit):
-        display_game.tick()
+        await display_game.tick()
 
 
-def test_display_handles_many_ticks(display_game):
+async def test_display_handles_many_ticks(display_game):
     """Smoke test: 60 ticks triggers the team-population text refresh."""
     for _ in range(65):
         if display_game.winner is not None:
             break
-        display_game.tick()
+        await display_game.tick()

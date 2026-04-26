@@ -1,3 +1,4 @@
 -r requirements.txt
 Cython>=3.0
 pytest>=7
+pytest-asyncio>=0.23
