@@ -271,7 +271,7 @@ class Game(object):
             y = a.y
             agent_view = agent_map_get_small_view_fast(x, y)
             plant_view = plant_map_get_small_view_fast(x, y)
-            world_view = WV(a, agent_view, plant_view, terr_map, energy_map)
+            world_view = WV(a, agent_view, plant_view, terr_map, energy_map, self.time)
             views_append((a, world_view))
 
         # Determine each agent's action concurrently. Each call enforces the
@@ -639,12 +639,13 @@ class AgentView(object):
 
 
 class WorldView(object):
-    def __init__(self, me, agent_views, plant_views, terr_map, energy_map):
+    def __init__(self, me, agent_views, plant_views, terr_map, energy_map, tick=0):
         self.agent_views = agent_views
         self.plant_views = plant_views
         self.energy_map = energy_map
         self.terr_map = terr_map
         self.me = me
+        self.tick = tick
 
     def get_me(self):
         return self.me
@@ -657,9 +658,45 @@ class WorldView(object):
 
     def get_terr(self):
         return self.terr_map
-    
+
     def get_energy(self):
         return self.energy_map
+
+    def to_json(self):
+        """Serializable snapshot of this view, suitable for sending over a
+        network transport (HTTP, MCP). Terrain and energy are 3x3 patches
+        centered on the agent; out-of-range cells are null."""
+
+        def _scalar(v):
+            return None if v is None else int(v)
+
+        me = self.me
+        cx, cy = me.get_pos()
+        return {
+            "me": {
+                "team": int(me.get_team()),
+                "energy": int(me.energy),
+                "loaded": bool(me.loaded),
+                "pos": [int(cx), int(cy)],
+            },
+            "agents": [
+                {"team": int(a.get_team()), "pos": [int(a.get_pos()[0]), int(a.get_pos()[1])]}
+                for a in self.agent_views
+            ],
+            "plants": [
+                {"eff": int(p.get_eff()), "pos": [int(p.get_pos()[0]), int(p.get_pos()[1])]}
+                for p in self.plant_views
+            ],
+            "terrain": [
+                [_scalar(self.terr_map.get(cx - 1 + dx, cy - 1 + dy)) for dy in range(3)]
+                for dx in range(3)
+            ],
+            "energy": [
+                [_scalar(self.energy_map.get(cx - 1 + dx, cy - 1 + dy)) for dy in range(3)]
+                for dx in range(3)
+            ],
+            "tick": int(self.tick),
+        }
 
 
 class Display(object):
