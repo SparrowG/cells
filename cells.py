@@ -389,7 +389,6 @@ class ObjectMapLayer(MapLayer):
         self.surf.set_colorkey((0,0,0))
         self.surf.fill((0,0,0))
         self.pixels = None
-#        self.pixels = pygame.PixelArray(self.surf)
 
     def lock(self):
         self.pixels = pygame.surfarray.pixels2d(self.surf)
@@ -596,24 +595,16 @@ class Display(object):
 
     def update(self, terr, pop, plants, agent_map, plant_map, energy_map,
                ticks, nteams, show_energy, show_agents):
-        # Slower version:
-        # img = ((numpy.minimum(150, 20 * terr.values) << 16) +
-        #       ((numpy.minimum(150, 10 * terr.values + 10.energy_map.values)) << 8))
-         
         r = numpy.minimum(150, 20 * terr.values)
         r <<= 16
 
-#        g = numpy.minimum(150, 10 * terr.values + 10 * energy_map.values)
+        img = r
         if show_energy:
             g = terr.values + energy_map.values
             g *= 10
             g = numpy.minimum(150, g)
             g <<= 8
-
-        img = r
-        if show_energy:
             img += g
- #       b = numpy.zeros_like(terr.values)
 
         img_surf = pygame.Surface((self.width, self.height))
         pygame.surfarray.blit_array(img_surf, img)
@@ -720,8 +711,6 @@ def _parse_cli(argv=None):
 
 
 def main(argv=None):
-    global bounds, symmetric, mind_list
-
     args = _parse_cli(argv)
 
     if args.seed is not None:
@@ -754,11 +743,11 @@ def main(argv=None):
     else:
         mind_list = [(n, get_mind(n)) for n in minds_str.split(',')]
 
-    return args
+    return args, bounds, symmetric, mind_list
 
 
 if __name__ == "__main__":
-    args = main()
+    args, bounds, symmetric, mind_list = main()
     while True:
         game = Game(bounds, mind_list, symmetric, args.max_time, headless=args.headless)
         while game.winner is None:
