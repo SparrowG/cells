@@ -37,6 +37,10 @@ If the top candidate has open questions you genuinely can't answer from the issu
 - Commit with a message that explains the **why**, not the what. Reference the issue with `(#N)` in the subject line.
 - `git push -u origin claude/issue-<N>-<slug>`.
 - Open a PR via `mcp__github__create_pull_request` with: closes link, summary of approach, test plan checkboxes, and any notes about deferred work.
+- **Run `/review` against the PR.** Triage findings:
+  - **Correctness / security / spec-violations** → fix on the same branch, push the fix as a new commit (never amend), re-run `/review`. Repeat until the review is clean on those categories.
+  - **Style / nice-to-haves / "would be cleaner"** → don't fix in this PR. Note them in the wrap-up's "Tasks that could be broken down" section so they're durable.
+  - **False positives** → ignore, but mention briefly in the wrap-up so the user can sanity-check.
 - Merge the PR via `mcp__github__merge_pull_request` with `merge_method: squash`. (User has standing approval for squash-merging your own PRs — see prior session log.)
 
 ### 4. Wrap up
