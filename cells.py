@@ -53,48 +53,79 @@ def _enqueue_actions(agent, result):
         agent.action_queue.append(result)
 
 
-async def _act_for_agent(agent, view, msg):
+async def _act_for_agent(agent, view, msg, *, is_disqualified=False, on_strike=None):
     """Determine this tick's action for an agent under the 5s soft / 60s hard
     timeout model. May queue future actions for subsequent ticks if the mind
     returned a list. Falls back to last_action (or ACT_EAT noop) if the mind
-    is still in flight, raised, or returned None."""
+    is still in flight, raised, or returned None.
+
+    If `is_disqualified` is True, the agent NOOPs unconditionally — its
+    team has burned through too many strikes (see #25).
+
+    `on_strike(reason)` is invoked once per fallback event so the caller
+    can count strikes. Reasons: 'soft_timeout', 'hard_timeout',
+    'exception', 'malformed'.
+    """
+    if is_disqualified:
+        return Action(ACT_EAT)
+
     if agent.action_queue:
         action = agent.action_queue.popleft()
         agent.last_action = action
         return action
 
+    fresh = None
+    fresh_reason = None
+
     if agent.pending_task is not None and agent.pending_task.done():
         try:
-            result = agent.pending_task.result()
+            fresh = agent.pending_task.result()
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            fresh_reason = "hard_timeout"
         except Exception:
-            result = None
+            fresh_reason = "exception"
         agent.pending_task = None
-        _enqueue_actions(agent, result)
+        if fresh is None and fresh_reason is None:
+            fresh_reason = "malformed"
+
+    if fresh is None and agent.pending_task is None:
+        agent.pending_task = asyncio.create_task(
+            _call_act(agent.act, view, msg)
+        )
+        try:
+            fresh = await asyncio.wait_for(
+                asyncio.shield(agent.pending_task), SOFT_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            fresh_reason = "soft_timeout"
+        except asyncio.CancelledError:
+            fresh_reason = "hard_timeout"
+            agent.pending_task = None
+        except Exception:
+            fresh_reason = "exception"
+            agent.pending_task = None
+        else:
+            agent.pending_task = None
+            if fresh is None:
+                fresh_reason = "malformed"
+
+    if fresh is not None:
+        _enqueue_actions(agent, fresh)
         if agent.action_queue:
             action = agent.action_queue.popleft()
             agent.last_action = action
             return action
 
-    if agent.pending_task is None:
-        agent.pending_task = asyncio.create_task(
-            _call_act(agent.act, view, msg)
-        )
-        try:
-            result = await asyncio.wait_for(
-                asyncio.shield(agent.pending_task), SOFT_TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
-            # Still running; check again next tick.
-            pass
-        except Exception:
-            agent.pending_task = None
-        else:
-            agent.pending_task = None
-            _enqueue_actions(agent, result)
-            if agent.action_queue:
-                action = agent.action_queue.popleft()
-                agent.last_action = action
-                return action
+    # If we still have nothing fresh and a task is in flight from a prior
+    # tick, the bot is keeping us in fall-back territory — count a soft
+    # strike for this tick. Without this, a permanently hung bot would
+    # only ever accumulate one strike (on the tick the call was first
+    # spawned) and never trip the DQ threshold.
+    if fresh is None and fresh_reason is None and agent.pending_task is not None:
+        fresh_reason = "soft_timeout"
+
+    if fresh_reason is not None and on_strike is not None:
+        on_strike(fresh_reason)
 
     return agent.last_action if agent.last_action is not None else Action(ACT_EAT)
 
@@ -144,7 +175,7 @@ def get_next_move(old_x, old_y, x, y):
 
 class Game(object):
     ''' Represents a game between different minds. '''
-    def __init__(self, bounds, mind_list, symmetric, max_time, headless = False):
+    def __init__(self, bounds, mind_list, symmetric, max_time, headless=False, strike_threshold=3):
         self.size = self.width, self.height = (bounds, bounds)
         self.mind_list = mind_list
         self.messages = [MessageQueue() for x in mind_list]
@@ -154,6 +185,10 @@ class Game(object):
         self.time = 0
         self.clock = pygame.time.Clock()
         self.max_time = max_time
+        self.strike_threshold = strike_threshold
+        self.strikes = [0 for _ in mind_list]
+        self.disqualified = set()
+        self.strike_log = []  # (tick, team, reason, count)
         self.tic = time.time()
         self.terr = ScalarMapLayer(self.size)
         self.terr.set_perlin(10, symmetric)
@@ -248,6 +283,13 @@ class Game(object):
         for a in self.agent_population:
             a.pending_task = None
 
+    def _record_strike(self, team, reason):
+        self.strikes[team] += 1
+        self.strike_log.append((self.time, team, reason, self.strikes[team]))
+        if self.strikes[team] >= self.strike_threshold and team not in self.disqualified:
+            self.disqualified.add(team)
+            self.strike_log.append((self.time, team, "DISQUALIFIED", self.strikes[team]))
+
     def move_agent(self, a, x, y):
         ''' Moves agent, a, to new position (x,y) unless difference in terrain levels between
         its current position and new position is greater than 4.'''
@@ -275,11 +317,21 @@ class Game(object):
             views_append((a, world_view))
 
         # Determine each agent's action concurrently. Each call enforces the
-        # 5s soft / 60s hard timeout model (see _act_for_agent).
+        # 5s soft / 60s hard timeout model (see _act_for_agent), records a
+        # strike on every fallback, and NOOPs if the team is disqualified.
         messages = self.messages
         agents = [a for (a, _) in views]
         acts = await asyncio.gather(
-            *[_act_for_agent(a, v, messages[a.team]) for (a, v) in views]
+            *[
+                _act_for_agent(
+                    a,
+                    v,
+                    messages[a.team],
+                    is_disqualified=(a.team in self.disqualified),
+                    on_strike=(lambda reason, team=a.team: self._record_strike(team, reason)),
+                )
+                for (a, v) in views
+            ]
         )
         actions = list(zip(agents, acts))
         actions_dict = dict(actions)
