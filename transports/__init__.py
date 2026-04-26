@@ -6,5 +6,6 @@ See cells-server epic (#19) for the architecture overview.
 """
 
 from transports.http_mind import HttpMind
+from transports.mcp_mind import McpMind
 
-__all__ = ["HttpMind"]
+__all__ = ["HttpMind", "McpMind"]
