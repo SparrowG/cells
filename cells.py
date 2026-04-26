@@ -693,9 +693,49 @@ class Message(object):
         return self.message
 
 
-def main():
+def _parse_cli(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Cells: a multi-agent Python programming game.",
+    )
+    parser.add_argument(
+        "minds",
+        nargs="*",
+        help="Mind module names from minds/. Need 2+ to override default.cfg.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without opening a display window. Exits after one game.",
+    )
+    parser.add_argument(
+        "--max-time",
+        type=int,
+        default=None,
+        help="Tick limit. Default: -1 (no limit) with display, 5000 headless.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed random and numpy.random for reproducible runs.",
+    )
+    args = parser.parse_args(argv)
+    if args.max_time is None:
+        args.max_time = 5000 if args.headless else -1
+    return args
+
+
+def main(argv=None):
     global bounds, symmetric, mind_list
-    
+
+    args = _parse_cli(argv)
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        numpy.random.seed(args.seed)
+
     try:
         config.read('default.cfg')
         bounds = config.getint('terrain', 'bounds')
@@ -716,19 +756,20 @@ def main():
         bounds = config.getint('terrain', 'bounds')
         symmetric = config.getboolean('terrain', 'symmetric')
         minds_str = str(config.get('minds', 'minds'))
-    mind_list = [(n, get_mind(n)) for n in minds_str.split(',')]
 
-    # accept command line arguments for the minds over those in the config
-    try:
-        if len(sys.argv)>2:
-            mind_list = [(n,get_mind(n)) for n in sys.argv[1:] ]
-    except (ImportError, IndexError):
-        pass
+    if len(args.minds) >= 2:
+        mind_list = [(n, get_mind(n)) for n in args.minds]
+    else:
+        mind_list = [(n, get_mind(n)) for n in minds_str.split(',')]
+
+    return args
 
 
 if __name__ == "__main__":
-    main()
+    args = main()
     while True:
-        game = Game(bounds, mind_list, symmetric, -1)
+        game = Game(bounds, mind_list, symmetric, args.max_time, headless=args.headless)
         while game.winner is None:
             game.tick()
+        if args.headless:
+            break
