@@ -61,7 +61,7 @@ def test_module_exports_legacy_api():
     assert hasattr(cells, "Game")
 
 
-def test_game_runs_to_draw_on_max_time():
+async def test_game_runs_to_draw_on_max_time():
     """Two stub minds that only eat will both survive until max_time."""
     _seed()
     g = cells.Game(
@@ -73,7 +73,7 @@ def test_game_runs_to_draw_on_max_time():
     )
     ticks = 0
     while g.winner is None and ticks < 500:
-        g.tick()
+        await g.tick()
         ticks += 1
     assert g.winner is not None
     assert g.winner == -1  # draw on max_time
@@ -94,7 +94,7 @@ class AttackEverythingMind:
         return cells.Action(cells.ACT_EAT)
 
 
-def test_attack_action_is_applied():
+async def test_attack_action_is_applied():
     """Place two attacking minds adjacent; one should kill the other."""
     _seed(2)
     g = cells.Game(
@@ -106,7 +106,7 @@ def test_attack_action_is_applied():
     )
     ticks = 0
     while g.winner is None and ticks < 500:
-        g.tick()
+        await g.tick()
         ticks += 1
     assert g.winner is not None
 
@@ -132,7 +132,7 @@ class CycleMind:
         return a
 
 
-def test_all_action_types_dispatch_without_crash():
+async def test_all_action_types_dispatch_without_crash():
     _seed(3)
     g = cells.Game(
         30,
@@ -143,6 +143,6 @@ def test_all_action_types_dispatch_without_crash():
     )
     ticks = 0
     while g.winner is None and ticks < 200:
-        g.tick()
+        await g.tick()
         ticks += 1
     assert ticks > 0

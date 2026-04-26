@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 
+import asyncio
+import collections
 import configparser
+import inspect
 import random
 import sys
 import time
@@ -20,6 +23,80 @@ def get_mind(name):
     mind = sys.modules[full_name]
     mind.name = name
     return mind
+
+
+SOFT_TIMEOUT_SECONDS = 5.0
+HARD_TIMEOUT_SECONDS = 60.0
+
+
+async def _call_act(act_fn, view, msg):
+    """Invoke a mind's act() under a 60s hard ceiling.
+
+    Works with both sync (`def act`) and async (`async def act`) minds:
+    if the return value is awaitable, await it; otherwise return as-is.
+    Cancellation propagates so the caller's wait_for can shield without
+    leaking tasks past game end.
+    """
+    async with asyncio.timeout(HARD_TIMEOUT_SECONDS):
+        result = act_fn(view, msg)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+
+def _enqueue_actions(agent, result):
+    if result is None:
+        return
+    if isinstance(result, list):
+        agent.action_queue.extend(a for a in result if a is not None)
+    else:
+        agent.action_queue.append(result)
+
+
+async def _act_for_agent(agent, view, msg):
+    """Determine this tick's action for an agent under the 5s soft / 60s hard
+    timeout model. May queue future actions for subsequent ticks if the mind
+    returned a list. Falls back to last_action (or ACT_EAT noop) if the mind
+    is still in flight, raised, or returned None."""
+    if agent.action_queue:
+        action = agent.action_queue.popleft()
+        agent.last_action = action
+        return action
+
+    if agent.pending_task is not None and agent.pending_task.done():
+        try:
+            result = agent.pending_task.result()
+        except Exception:
+            result = None
+        agent.pending_task = None
+        _enqueue_actions(agent, result)
+        if agent.action_queue:
+            action = agent.action_queue.popleft()
+            agent.last_action = action
+            return action
+
+    if agent.pending_task is None:
+        agent.pending_task = asyncio.create_task(
+            _call_act(agent.act, view, msg)
+        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.shield(agent.pending_task), SOFT_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            # Still running; check again next tick.
+            pass
+        except Exception:
+            agent.pending_task = None
+        else:
+            agent.pending_task = None
+            _enqueue_actions(agent, result)
+            if agent.action_queue:
+                action = agent.action_queue.popleft()
+                agent.last_action = action
+                return action
+
+    return agent.last_action if agent.last_action is not None else Action(ACT_EAT)
 
 
 
@@ -155,6 +232,21 @@ class Game(object):
         if a.loaded:
             a.loaded = False
             self.terr.change(a.x, a.y, 1)
+        if a.pending_task is not None and not a.pending_task.done():
+            a.pending_task.cancel()
+        a.pending_task = None
+
+    async def _cancel_all_pending(self):
+        pending = [
+            a.pending_task for a in self.agent_population
+            if a.pending_task is not None and not a.pending_task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for a in self.agent_population:
+            a.pending_task = None
 
     def move_agent(self, a, x, y):
         ''' Moves agent, a, to new position (x,y) unless difference in terrain levels between
@@ -165,7 +257,7 @@ class Game(object):
             a.x = x
             a.y = y
 
-    def run_agents(self):
+    async def run_agents(self):
         # Create a list containing the view for each agent in the population.
         views = []
         agent_map_get_small_view_fast = self.agent_map.get_small_view_fast
@@ -182,11 +274,14 @@ class Game(object):
             world_view = WV(a, agent_view, plant_view, terr_map, energy_map)
             views_append((a, world_view))
 
-        # Create a list containing the action for each agent, where each agent
-        # determines its actions based on its view of the world and messages 
-        # from its team.
+        # Determine each agent's action concurrently. Each call enforces the
+        # 5s soft / 60s hard timeout model (see _act_for_agent).
         messages = self.messages
-        actions = [(a, a.act(v, messages[a.team])) for (a, v) in views]
+        agents = [a for (a, _) in views]
+        acts = await asyncio.gather(
+            *[_act_for_agent(a, v, messages[a.team]) for (a, v) in views]
+        )
+        actions = list(zip(agents, acts))
         actions_dict = dict(actions)
         random.shuffle(actions)
 
@@ -300,8 +395,11 @@ class Game(object):
             self.winner = -1
 
         self.agent_map.unlock()
-        
-    def tick(self):
+
+        if self.winner is not None:
+            await self._cancel_all_pending()
+
+    async def tick(self):
         if not self.headless:
             scale = self.disp.scale
             for event in pygame.event.get():
@@ -328,7 +426,7 @@ class Game(object):
             pygame.event.pump()
             self.disp.flip()
 
-        self.run_agents()
+        await self.run_agents()
         self.run_plants()
         for msg in self.messages:
             msg.update()
@@ -458,7 +556,7 @@ TEAM_COLORS_FAST = [0xFF0000, 0xFFFFFF, 0xFF00FF, 0xFFFF00]
 
 class Agent(object):
     __slots__ = ['x', 'y', 'mind', 'energy', 'alive', 'team', 'loaded', 'color',
-                 'act']
+                 'act', 'action_queue', 'last_action', 'pending_task']
     def __init__(self, x, y, energy, team, AgentMind, cargs):
         self.x = x
         self.y = y
@@ -469,6 +567,9 @@ class Agent(object):
         self.loaded = False
         self.color = TEAM_COLORS_FAST[team % len(TEAM_COLORS_FAST)]
         self.act = self.mind.act
+        self.action_queue = collections.deque()
+        self.last_action = None
+        self.pending_task = None
     def __str__(self):
         return "Agent from team %i, energy %i" % (self.team,self.energy)
     def attack(self, other, offset = 0, contested = False):
@@ -746,11 +847,15 @@ def main(argv=None):
     return args, bounds, symmetric, mind_list
 
 
-if __name__ == "__main__":
-    args, bounds, symmetric, mind_list = main()
+async def _run_loop(args, bounds, symmetric, mind_list):
     while True:
         game = Game(bounds, mind_list, symmetric, args.max_time, headless=args.headless)
         while game.winner is None:
-            game.tick()
+            await game.tick()
         if args.headless:
             break
+
+
+if __name__ == "__main__":
+    args, bounds, symmetric, mind_list = main()
+    asyncio.run(_run_loop(args, bounds, symmetric, mind_list))

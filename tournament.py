@@ -7,6 +7,7 @@ draw). Writes scores.csv sorted by score descending.
 """
 
 import argparse
+import asyncio
 import configparser
 import random
 import sys
@@ -14,6 +15,13 @@ import sys
 import numpy
 
 from cells import Game, get_mind
+
+
+async def _play_game(bounds, pair, symmetric, max_time):
+    game = Game(bounds, pair, symmetric, max_time, headless=True)
+    while game.winner is None:
+        await game.tick()
+    return game.winner
 
 
 def _parse_cli(argv=None):
@@ -74,7 +82,7 @@ def _load_config(path="tournament.cfg"):
     return bounds, symmetric, [n.strip() for n in minds_str.split(",") if n.strip()]
 
 
-def main(argv=None):
+async def main_async(argv=None):
     args = _parse_cli(argv)
 
     if args.seed is not None:
@@ -98,14 +106,19 @@ def main(argv=None):
     ]
 
     for round_idx in range(args.rounds):
-        for pair in pairings:
-            game = Game(bounds, pair, symmetric, args.max_time, headless=True)
-            while game.winner is None:
-                game.tick()
-            if game.winner >= 0:
-                idx = mind_list.index(pair[game.winner])
-                scores[idx] += 3
-            elif game.winner == -1:
+        # Round-robin games within a round are independent — run them
+        # concurrently so a slow async mind in one pair doesn't stall
+        # the others. With sync minds this is effectively sequential.
+        winners = await asyncio.gather(
+            *[
+                _play_game(bounds, pair, symmetric, args.max_time)
+                for pair in pairings
+            ]
+        )
+        for pair, winner in zip(pairings, winners):
+            if winner >= 0:
+                scores[mind_list.index(pair[winner])] += 3
+            elif winner == -1:
                 scores[mind_list.index(pair[0])] += 1
                 scores[mind_list.index(pair[1])] += 1
             print(scores)
@@ -116,6 +129,10 @@ def main(argv=None):
     with open(args.output, "w") as f:
         for name, score in name_score:
             f.write("%s;%s\n" % (name, score))
+
+
+def main(argv=None):
+    asyncio.run(main_async(argv))
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ def test_mind2_exposes_agent_mind():
     assert hasattr(m, "act")
 
 
-def test_mind1_vs_mind2_runs_to_termination(named_minds):
+async def test_mind1_vs_mind2_runs_to_termination(named_minds):
     """End-to-end headless game with the bundled minds."""
     _seed()
     m1, m2 = named_minds
@@ -57,13 +57,13 @@ def test_mind1_vs_mind2_runs_to_termination(named_minds):
     )
     ticks = 0
     while game.winner is None and ticks < 500:
-        game.tick()
+        await game.tick()
         ticks += 1
     assert game.winner is not None, "game did not terminate within tick budget"
     assert ticks > 0
 
 
-def test_mind1_self_play_runs(named_minds):
+async def test_mind1_self_play_runs(named_minds):
     """Self-play surfaces strategy bugs that asymmetric games hide."""
     _seed(7)
     m1, _ = named_minds
@@ -76,6 +76,6 @@ def test_mind1_self_play_runs(named_minds):
     )
     ticks = 0
     while game.winner is None and ticks < 300:
-        game.tick()
+        await game.tick()
         ticks += 1
     assert game.winner is not None
