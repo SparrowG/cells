@@ -15,8 +15,8 @@ def get_small_view_fast(self, int x, int y):
     ret = []
     get = self.get
 
-    for dr in xrange(-1,2):
-        for dc in xrange(-1,2):
+    for dr in range(-1, 2):
+        for dc in range(-1, 2):
             if not dr and not dc:
                 continue
             adj_x = x + dr
