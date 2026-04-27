@@ -25,7 +25,7 @@ import json
 from contextlib import AsyncExitStack
 from typing import Any
 
-from transports.http_mind import _parse_action
+from transports.http_mind import _parse_action, _parse_batch_response
 
 import cells
 
@@ -47,6 +47,25 @@ def _parse_result(result) -> Any:
         except json.JSONDecodeError:
             return None
     return None
+
+
+def _parse_batch_result(result) -> dict:
+    """Parse an MCP CallToolResult into {agent_id: Action | list[Action] | None}."""
+    if getattr(result, "isError", False):
+        return {}
+    structured = getattr(result, "structuredContent", None)
+    if structured:
+        return _parse_batch_response(structured)
+    content = getattr(result, "content", None) or []
+    for item in content:
+        text = getattr(item, "text", None)
+        if text is None:
+            continue
+        try:
+            return _parse_batch_response(json.loads(text))
+        except json.JSONDecodeError:
+            return {}
+    return {}
 
 
 class McpMind:
@@ -120,6 +139,23 @@ class McpMind:
             return _parse_result(result)
         except Exception:
             return None
+
+    async def act_batch(self, agents, msg):
+        """Per-team batch endpoint (#23). Calls the contestant's `act_batch`
+        MCP tool with the team's full agent list."""
+        if not agents:
+            return {}
+        arguments = {
+            "tick": int(agents[0][1].tick),
+            "messages": list(msg),
+            "agents": [{"id": aid, "view": v.to_json()} for (aid, v) in agents],
+        }
+        try:
+            await self._ensure_session()
+            result = await self._session.call_tool("act_batch", arguments=arguments)
+        except Exception:
+            return {}
+        return _parse_batch_result(result)
 
     async def aclose(self):
         if self._stack is not None:
