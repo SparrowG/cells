@@ -299,6 +299,81 @@ class Game(object):
             a.x = x
             a.y = y
 
+    async def _dispatch_team(self, team, agent_views):
+        """Resolve this tick's action for every agent on `team`. Uses the
+        per-team batch protocol (#23) if the team's mind module exposes
+        `act_batch`; otherwise falls back to the per-agent path that
+        carries the #18 soft/hard timeout model."""
+        is_dq = team in self.disqualified
+        mind_module = self.mind_list[team][1]
+        if not is_dq and hasattr(mind_module, "act_batch"):
+            return await self._dispatch_team_batch(team, mind_module, agent_views)
+        return await asyncio.gather(*[
+            _act_for_agent(
+                a, v, self.messages[team],
+                is_disqualified=is_dq,
+                on_strike=(lambda reason, t=team: self._record_strike(t, reason)),
+            )
+            for (a, v) in agent_views
+        ])
+
+    async def _dispatch_team_batch(self, team, mind_module, agent_views):
+        """One batch call per team per tick. Agents with pre-planned moves
+        from a prior tick consume their queue first; only the rest are
+        sent. Missing entries in the response strike the team and fall
+        back to last_action — matching the per-agent semantics."""
+        results = [None] * len(agent_views)
+        for i, (a, _) in enumerate(agent_views):
+            if a.action_queue:
+                action = a.action_queue.popleft()
+                a.last_action = action
+                results[i] = action
+
+        pending_idx = [i for i in range(len(agent_views)) if results[i] is None]
+        if not pending_idx:
+            return results
+
+        batch_input = [(agent_views[i][0].id, agent_views[i][1]) for i in pending_idx]
+        msg = self.messages[team]
+
+        raw = None
+        reason = None
+        try:
+            raw = await asyncio.wait_for(
+                mind_module.act_batch(batch_input, msg),
+                SOFT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            reason = "soft_timeout"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            reason = "exception"
+
+        if not isinstance(raw, dict):
+            raw = {}
+
+        for i in pending_idx:
+            a = agent_views[i][0]
+            agent_result = raw.get(a.id)
+            if agent_result is None:
+                self._record_strike(team, reason or "malformed")
+                fallback = a.last_action if a.last_action is not None else Action(ACT_EAT)
+                results[i] = fallback
+            elif isinstance(agent_result, list):
+                if not agent_result:
+                    self._record_strike(team, "malformed")
+                    fallback = a.last_action if a.last_action is not None else Action(ACT_EAT)
+                    results[i] = fallback
+                else:
+                    a.action_queue.extend(agent_result[1:])
+                    a.last_action = agent_result[0]
+                    results[i] = agent_result[0]
+            else:
+                a.last_action = agent_result
+                results[i] = agent_result
+        return results
+
     async def run_agents(self):
         # Create a list containing the view for each agent in the population.
         views = []
@@ -316,23 +391,23 @@ class Game(object):
             world_view = WV(a, agent_view, plant_view, terr_map, energy_map, self.time)
             views_append((a, world_view))
 
-        # Determine each agent's action concurrently. Each call enforces the
-        # 5s soft / 60s hard timeout model (see _act_for_agent), records a
-        # strike on every fallback, and NOOPs if the team is disqualified.
-        messages = self.messages
-        agents = [a for (a, _) in views]
-        acts = await asyncio.gather(
-            *[
-                _act_for_agent(
-                    a,
-                    v,
-                    messages[a.team],
-                    is_disqualified=(a.team in self.disqualified),
-                    on_strike=(lambda reason, team=a.team: self._record_strike(team, reason)),
-                )
-                for (a, v) in views
-            ]
+        # Group views by team and dispatch one team at a time (#23). If the
+        # team's mind exposes act_batch, the team's agents share a single
+        # call per tick; otherwise the engine falls back to per-agent
+        # dispatch (preserving the soft/hard timeout model from #18).
+        by_team = collections.defaultdict(list)
+        for (a, v) in views:
+            by_team[a.team].append((a, v))
+        team_ids = sorted(by_team.keys())
+        per_team_results = await asyncio.gather(
+            *[self._dispatch_team(t, by_team[t]) for t in team_ids]
         )
+        acts_by_agent = {}
+        for tid, results in zip(team_ids, per_team_results):
+            for (a, _), action in zip(by_team[tid], results):
+                acts_by_agent[a] = action
+        agents = [a for (a, _) in views]
+        acts = [acts_by_agent[a] for a in agents]
         actions = list(zip(agents, acts))
         actions_dict = dict(actions)
         random.shuffle(actions)
@@ -608,7 +683,8 @@ TEAM_COLORS_FAST = [0xFF0000, 0xFFFFFF, 0xFF00FF, 0xFFFF00]
 
 class Agent(object):
     __slots__ = ['x', 'y', 'mind', 'energy', 'alive', 'team', 'loaded', 'color',
-                 'act', 'action_queue', 'last_action', 'pending_task']
+                 'act', 'action_queue', 'last_action', 'pending_task', 'id']
+    _next_id = 0
     def __init__(self, x, y, energy, team, AgentMind, cargs):
         self.x = x
         self.y = y
@@ -622,6 +698,8 @@ class Agent(object):
         self.action_queue = collections.deque()
         self.last_action = None
         self.pending_task = None
+        Agent._next_id += 1
+        self.id = "agent-%d" % Agent._next_id
     def __str__(self):
         return "Agent from team %i, energy %i" % (self.team,self.energy)
     def attack(self, other, offset = 0, contested = False):

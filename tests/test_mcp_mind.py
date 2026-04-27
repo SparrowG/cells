@@ -119,6 +119,53 @@ async def test_text_content_malformed_returns_none():
     assert result is None
 
 
+async def test_act_batch_round_trip():
+    """McpMind.act_batch calls the `act_batch` tool and parses the
+    structuredContent response into per-agent actions."""
+    session = FakeSession(
+        structured={
+            "actions": [
+                {"id": "agent-0", "action": {"type": cells.ACT_LIFT}},
+                {"id": "agent-1", "action": {"actions": [{"type": cells.ACT_DROP}]}},
+            ]
+        }
+    )
+    mind = McpMind("bot", session=session)
+    out = await mind.act_batch(
+        [("agent-0", _make_view()), ("agent-1", _make_view())], ["hello"]
+    )
+    assert session.calls[0][0] == "act_batch"
+    args = session.calls[0][1]
+    assert args["tick"] == 1
+    assert args["messages"] == ["hello"]
+    assert [a["id"] for a in args["agents"]] == ["agent-0", "agent-1"]
+    assert out["agent-0"].type == cells.ACT_LIFT
+    assert isinstance(out["agent-1"], list)
+    assert out["agent-1"][0].type == cells.ACT_DROP
+
+
+async def test_act_batch_text_content():
+    payload = {"actions": [{"id": "agent-0", "action": {"type": cells.ACT_EAT}}]}
+    session = FakeSession(text=json.dumps(payload))
+    mind = McpMind("bot", session=session)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out["agent-0"].type == cells.ACT_EAT
+
+
+async def test_act_batch_call_raises_returns_empty():
+    session = FakeSession(raises=RuntimeError("boom"))
+    mind = McpMind("bot", session=session)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out == {}
+
+
+async def test_act_batch_is_error_returns_empty():
+    session = FakeSession(structured={"actions": []}, is_error=True)
+    mind = McpMind("bot", session=session)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out == {}
+
+
 async def test_mcp_mind_plays_a_full_game():
     session = FakeSession(structured={"type": cells.ACT_EAT})
     mcp_bot = McpMind("mcp_bot", session=session)

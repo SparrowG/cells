@@ -57,6 +57,27 @@ def _parse_action(payload: Any):
     return None
 
 
+def _parse_batch_response(payload: Any) -> dict:
+    """Decode a batch response body into {agent_id: Action | list[Action] | None}.
+
+    Missing or malformed entries are simply omitted; the engine treats
+    absence as a strike + last_action fallback."""
+    if not isinstance(payload, dict):
+        return {}
+    actions = payload.get("actions")
+    if not isinstance(actions, list):
+        return {}
+    out = {}
+    for entry in actions:
+        if not isinstance(entry, dict):
+            continue
+        aid = entry.get("id")
+        if not isinstance(aid, str):
+            continue
+        out[aid] = _parse_action(entry.get("action"))
+    return out
+
+
 class HttpMind:
     """A mind backed by an HTTP endpoint. Acts as a mind module from the
     engine's perspective: exposes `name` and `AgentMind`.
@@ -101,6 +122,23 @@ class HttpMind:
             return _parse_action(r.json())
         except (httpx.HTTPError, json.JSONDecodeError, ValueError):
             return None
+
+    async def act_batch(self, agents, msg):
+        """Per-team batch endpoint (#23). `agents` is a list of
+        (agent_id, WorldView). Returns {agent_id: Action | list[Action] | None}."""
+        if not agents:
+            return {}
+        payload = {
+            "tick": int(agents[0][1].tick),
+            "messages": list(msg),
+            "agents": [{"id": aid, "view": v.to_json()} for (aid, v) in agents],
+        }
+        try:
+            r = await self._client.post(self._url, json=payload, headers=self._headers)
+            r.raise_for_status()
+            return _parse_batch_response(r.json())
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return {}
 
     async def aclose(self):
         await self._client.aclose()

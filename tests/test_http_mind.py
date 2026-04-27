@@ -133,6 +133,69 @@ async def test_response_missing_type_returns_none():
     await mind.aclose()
 
 
+async def test_act_batch_round_trip():
+    """The batch endpoint serialises the team's agents and parses the
+    keyed response back into per-agent actions."""
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "actions": [
+                    {"id": "agent-0", "action": {"type": cells.ACT_LIFT}},
+                    {"id": "agent-1", "action": {"actions": [{"type": cells.ACT_DROP}, {"type": cells.ACT_EAT}]}},
+                ]
+            },
+        )
+
+    mind = _make_mind(handler)
+    v0 = _make_view()
+    v1 = _make_view()
+    out = await mind.act_batch([("agent-0", v0), ("agent-1", v1)], ["hello"])
+
+    body = captured["body"]
+    assert body["tick"] == 1
+    assert body["messages"] == ["hello"]
+    assert [a["id"] for a in body["agents"]] == ["agent-0", "agent-1"]
+    assert body["agents"][0]["view"]["me"]["pos"] == [5, 5]
+
+    assert isinstance(out["agent-0"], cells.Action)
+    assert out["agent-0"].type == cells.ACT_LIFT
+    assert isinstance(out["agent-1"], list)
+    assert [a.type for a in out["agent-1"]] == [cells.ACT_DROP, cells.ACT_EAT]
+    await mind.aclose()
+
+
+async def test_act_batch_http_error_returns_empty():
+    def handler(request):
+        return httpx.Response(500, text="upstream error")
+
+    mind = _make_mind(handler)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out == {}
+    await mind.aclose()
+
+
+async def test_act_batch_partial_response():
+    """Missing entries in the response dict are simply absent from the
+    result; the engine handles the per-agent fallback."""
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"actions": [{"id": "agent-1", "action": {"type": cells.ACT_LIFT}}]},
+        )
+
+    mind = _make_mind(handler)
+    out = await mind.act_batch(
+        [("agent-0", _make_view()), ("agent-1", _make_view())], []
+    )
+    assert "agent-0" not in out
+    assert out["agent-1"].type == cells.ACT_LIFT
+    await mind.aclose()
+
+
 async def test_http_mind_plays_a_full_game():
     """End-to-end: an HttpMind opponent runs through the engine without
     errors. The remote bot just eats every tick."""
