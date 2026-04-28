@@ -1,0 +1,45 @@
+# Example bot registration config for cells (#24).
+#
+# Run head-to-head:
+#     python cells.py --bots bots.example.toml alice bob
+#
+# Run round-robin tournament across every bot in this file:
+#     python tournament.py --bots bots.example.toml
+#
+# Run a tournament across a subset:
+#     python tournament.py --bots bots.example.toml alice bob carol
+
+# In-process mind: imported directly into the engine. Lowest latency,
+# no network roundtrip. `module` is a Python import path.
+[bots.alice]
+transport = "in_process"
+module = "minds.mind1"
+
+# HTTP mind: cells POSTs the per-tick world view (or the per-team
+# batch payload, see #23) to `url`. Optional `headers` for auth,
+# optional `timeout` (seconds, default 5.0).
+[bots.bob]
+transport = "http"
+url = "https://bob.example.com/cells/act"
+headers = { Authorization = "Bearer xyz" }
+timeout = 5.0
+
+# MCP mind via stdio: cells spawns the contestant's server as a
+# subprocess and calls the `act` (or `act_batch`) tool over stdio.
+[bots.carol]
+transport = "mcp"
+mode = "stdio"
+command = ["python", "bots/carol_server.py"]
+
+# MCP mind via SSE: cells connects to a hosted MCP endpoint.
+[bots.dave]
+transport = "mcp"
+mode = "sse"
+url = "https://dave.example.com/mcp"
+
+# Tournament-level knobs. All keys optional; defaults shown.
+[tournament]
+bounds = 300
+symmetric = true
+rounds = 4
+max_time = 5000

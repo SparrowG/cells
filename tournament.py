@@ -31,7 +31,15 @@ def _parse_cli(argv=None):
     parser.add_argument(
         "minds",
         nargs="*",
-        help="Mind module names from minds/. Need 2+ to override tournament.cfg.",
+        help=(
+            "With --bots: subset of bot names from bots.toml to include. "
+            "Without --bots: legacy mind module names from minds/ — deprecated."
+        ),
+    )
+    parser.add_argument(
+        "--bots",
+        default=None,
+        help="Path to bots.toml. The canonical source of mind config (#24).",
     )
     parser.add_argument(
         "--seed",
@@ -42,14 +50,14 @@ def _parse_cli(argv=None):
     parser.add_argument(
         "--rounds",
         type=int,
-        default=4,
-        help="Number of round-robin rounds. Default: 4.",
+        default=None,
+        help="Number of round-robin rounds. Default: 4 (or [tournament].rounds).",
     )
     parser.add_argument(
         "--max-time",
         type=int,
-        default=5000,
-        help="Tick limit per game. Default: 5000.",
+        default=None,
+        help="Tick limit per game. Default: 5000 (or [tournament].max_time).",
     )
     parser.add_argument(
         "--output",
@@ -89,14 +97,25 @@ async def main_async(argv=None):
         random.seed(args.seed)
         numpy.random.seed(args.seed)
 
-    bounds, symmetric, cfg_minds = _load_config()
+    if args.bots:
+        from config import load_bots, select_bots
 
-    if len(args.minds) >= 2:
-        names = args.minds
+        mind_list, tournament_cfg = load_bots(args.bots)
+        if args.minds:
+            mind_list = select_bots(mind_list, args.minds)
+        bounds = int(tournament_cfg.get("bounds", 300))
+        symmetric = bool(tournament_cfg.get("symmetric", True))
+        rounds = args.rounds if args.rounds is not None else int(tournament_cfg.get("rounds", 4))
+        max_time = args.max_time if args.max_time is not None else int(tournament_cfg.get("max_time", 5000))
     else:
-        names = cfg_minds
+        from config import warn_legacy_cfg
 
-    mind_list = [(n, get_mind(n)) for n in names]
+        warn_legacy_cfg("tournament.cfg")
+        bounds, symmetric, cfg_minds = _load_config()
+        names = args.minds if len(args.minds) >= 2 else cfg_minds
+        mind_list = [(n, get_mind(n)) for n in names]
+        rounds = args.rounds if args.rounds is not None else 4
+        max_time = args.max_time if args.max_time is not None else 5000
 
     scores = [0 for _ in mind_list]
     pairings = [
@@ -105,13 +124,13 @@ async def main_async(argv=None):
         for b in range(a)
     ]
 
-    for round_idx in range(args.rounds):
+    for round_idx in range(rounds):
         # Round-robin games within a round are independent — run them
         # concurrently so a slow async mind in one pair doesn't stall
         # the others. With sync minds this is effectively sequential.
         winners = await asyncio.gather(
             *[
-                _play_game(bounds, pair, symmetric, args.max_time)
+                _play_game(bounds, pair, symmetric, max_time)
                 for pair in pairings
             ]
         )
