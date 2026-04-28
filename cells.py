@@ -953,7 +953,15 @@ def _parse_cli(argv=None):
     parser.add_argument(
         "minds",
         nargs="*",
-        help="Mind module names from minds/. Need 2+ to override default.cfg.",
+        help=(
+            "With --bots: bot names from bots.toml to play against each other. "
+            "Without --bots: legacy mind module names from minds/ — deprecated."
+        ),
+    )
+    parser.add_argument(
+        "--bots",
+        default=None,
+        help="Path to bots.toml. The canonical source of mind config (#24).",
     )
     parser.add_argument(
         "--headless",
@@ -984,6 +992,20 @@ def main(argv=None):
     if args.seed is not None:
         random.seed(args.seed)
         numpy.random.seed(args.seed)
+
+    if args.bots:
+        from config import load_bots, select_bots
+
+        mind_list, tournament_cfg = load_bots(args.bots)
+        if args.minds:
+            mind_list = select_bots(mind_list, args.minds)
+        bounds = int(tournament_cfg.get("bounds", 300))
+        symmetric = bool(tournament_cfg.get("symmetric", True))
+        return args, bounds, symmetric, mind_list
+
+    from config import warn_legacy_cfg
+
+    warn_legacy_cfg("default.cfg")
 
     try:
         config.read('default.cfg')
