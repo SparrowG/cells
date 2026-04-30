@@ -196,6 +196,25 @@ async def test_act_batch_partial_response():
     await mind.aclose()
 
 
+def test_verify_defaults_to_true():
+    mind = HttpMind("bot", "https://test.invalid/act")
+    assert mind._verify is True
+
+
+def test_verify_false_propagates_and_warns(capsys):
+    mind = HttpMind("bot", "https://test.invalid/act", verify=False)
+    assert mind._verify is False
+    captured = capsys.readouterr()
+    assert "verify=False" in captured.err
+    assert "'bot'" in captured.err
+
+
+def test_verify_true_does_not_warn(capsys):
+    HttpMind("bot", "https://test.invalid/act", verify=True)
+    captured = capsys.readouterr()
+    assert "verify=False" not in captured.err
+
+
 async def test_http_mind_plays_a_full_game():
     """End-to-end: an HttpMind opponent runs through the engine without
     errors. The remote bot just eats every tick."""

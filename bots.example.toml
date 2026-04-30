@@ -17,12 +17,14 @@ module = "minds.mind1"
 
 # HTTP mind: cells POSTs the per-tick world view (or the per-team
 # batch payload, see #23) to `url`. Optional `headers` for auth,
-# optional `timeout` (seconds, default 5.0).
+# optional `timeout` (seconds, default 5.0). Optional `verify`
+# (default true) — set false only for self-signed test servers.
 [bots.bob]
 transport = "http"
 url = "https://bob.example.com/cells/act"
 headers = { Authorization = "Bearer xyz" }
 timeout = 5.0
+verify = true
 
 # MCP mind via stdio: cells spawns the contestant's server as a
 # subprocess and calls the `act` (or `act_batch`) tool over stdio.

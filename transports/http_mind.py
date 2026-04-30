@@ -93,12 +93,25 @@ class HttpMind:
         headers: dict | None = None,
         timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        verify: bool = True,
     ):
         self.name = name
         self._url = url
         self._headers = headers or {}
         self._timeout = timeout
-        self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
+        self._verify = verify
+        client_kwargs = {"timeout": timeout}
+        if transport is not None:
+            client_kwargs["transport"] = transport
+        else:
+            client_kwargs["verify"] = verify
+        self._client = httpx.AsyncClient(**client_kwargs)
+        if not verify:
+            import sys
+            sys.stderr.write(
+                "warning: HttpMind %r constructed with verify=False; "
+                "TLS certificates will not be checked.\n" % name
+            )
 
         outer = self
 
