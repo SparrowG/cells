@@ -10,8 +10,10 @@ import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pathlib
+import random
 import sys
 
+import numpy
 import pygame
 import pytest
 
@@ -26,7 +28,12 @@ pygame.init()
 
 @pytest.fixture
 def display_game():
-    """Headed game with a tiny grid and the dummy SDL driver."""
+    """Headed game with a tiny grid and the dummy SDL driver. Seeds
+    random + numpy so agents are placed out of mutual attack range —
+    otherwise mind1's tick-0 attack flips the winner before the
+    SPACE-resets-winner test can read it (pre-existing flake)."""
+    random.seed(0)
+    numpy.random.seed(0)
     mind1.name = "mind1"
     game = cells.Game(
         bounds=20,

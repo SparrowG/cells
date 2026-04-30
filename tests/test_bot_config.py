@@ -61,6 +61,33 @@ def test_http_transport_constructs_httpmind(tmp_path):
     assert mind._url == "https://bob.example.com/act"
     assert mind._timeout == 7.5
     assert mind._headers == {"Authorization": "Bearer xyz"}
+    assert mind._verify is True  # default
+
+
+def test_http_verify_false_propagates(tmp_path, capsys):
+    path = _write(tmp_path, """
+        [bots.bob]
+        transport = "http"
+        url = "https://bob.example.com/act"
+        verify = false
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._verify is False
+    # The warning fires on construction.
+    assert "verify=False" in capsys.readouterr().err
+
+
+def test_http_verify_true_explicit(tmp_path):
+    path = _write(tmp_path, """
+        [bots.bob]
+        transport = "http"
+        url = "https://bob.example.com/act"
+        verify = true
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._verify is True
 
 
 def test_mcp_stdio_transport(tmp_path):

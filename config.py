@@ -38,6 +38,7 @@ def _load_http(name, spec):
         url,
         headers=spec.get("headers"),
         timeout=spec.get("timeout", 5.0),
+        verify=spec.get("verify", True),
     )
 
 
