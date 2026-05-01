@@ -21,10 +21,29 @@ module = "minds.mind1"
 # (default true) — set false only for self-signed test servers.
 # Optional `max_response_bytes` (default 1048576 = 1 MB) caps the
 # response size; oversized payloads are dropped + struck via #25.
+#
+# HMAC mutual auth (#44): set `hmac_secret` to a shared secret (e.g. a
+# base64-encoded 32-byte random value). The engine adds
+# X-Cells-Timestamp and X-Cells-Signature headers to every request and
+# verifies that the bot's response carries matching headers. Requests
+# from the bot side can verify the engine's signature the same way:
+#
+#   import hashlib, hmac, time
+#   def verify(secret, ts, body_bytes, sig):
+#       msg = ts.encode() + b"." + body_bytes
+#       expected = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+#       return hmac.compare_digest(expected, sig)
+#
+#   def sign(secret, body_bytes):
+#       ts = str(int(time.time()))
+#       sig = hmac.new(secret.encode(), ts.encode() + b"." + body_bytes, hashlib.sha256).hexdigest()
+#       return ts, sig
 [bots.bob]
 transport = "http"
 url = "https://bob.example.com/cells/act"
-headers = { Authorization = "Bearer xyz" }
+hmac_secret = "REPLACE_WITH_32B_BASE64"   # shared secret with the bot operator
+hmac_algorithm = "sha256"                  # default
+hmac_skew_seconds = 30                     # reject responses older than this
 timeout = 5.0
 verify = true
 max_response_bytes = 1048576
