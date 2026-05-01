@@ -196,6 +196,80 @@ async def test_act_batch_partial_response():
     await mind.aclose()
 
 
+def test_max_response_bytes_defaults_to_1mb():
+    mind = HttpMind("bot", "https://test.invalid/act")
+    assert mind._max_response_bytes == 1_048_576
+
+
+async def test_oversized_response_returns_none():
+    """A response body exceeding `max_response_bytes` is dropped, mirroring
+    a malformed response — engine falls back to last_action."""
+    huge = {"type": cells.ACT_EAT, "padding": "x" * 200_000}
+
+    def handler(request):
+        return httpx.Response(200, json=huge)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000)
+    agent = mind.AgentMind(None)
+    result = await agent.act(_make_view(), [])
+    assert result is None
+    await mind.aclose()
+
+
+async def test_response_just_under_cap_decoded_normally():
+    """A response within the cap parses normally."""
+    payload = {"type": cells.ACT_EAT}
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000_000)
+    agent = mind.AgentMind(None)
+    result = await agent.act(_make_view(), [])
+    assert isinstance(result, cells.Action)
+    assert result.type == cells.ACT_EAT
+    await mind.aclose()
+
+
+async def test_oversized_batch_response_returns_empty_dict():
+    """For act_batch, an oversized response yields {} so the engine strikes
+    every pending agent (per the existing #25 path)."""
+    huge = {
+        "actions": [{"id": "agent-0", "action": {"type": cells.ACT_EAT}}],
+        "padding": "x" * 200_000,
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=huge)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out == {}
+    await mind.aclose()
+
+
+async def test_default_cap_handles_realistic_batch_response():
+    """Default 1 MB cap is generous enough for a 50-agent batch response."""
+    actions = [
+        {"id": f"agent-{i}", "action": {"type": cells.ACT_EAT}} for i in range(50)
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json={"actions": actions})
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport)
+    out = await mind.act_batch(
+        [(f"agent-{i}", _make_view()) for i in range(50)], []
+    )
+    assert len(out) == 50
+    assert all(a.type == cells.ACT_EAT for a in out.values())
+    await mind.aclose()
+
+
 def test_verify_defaults_to_true():
     mind = HttpMind("bot", "https://test.invalid/act")
     assert mind._verify is True

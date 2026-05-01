@@ -90,6 +90,29 @@ def test_http_verify_true_explicit(tmp_path):
     assert mind._verify is True
 
 
+def test_http_max_response_bytes_propagates(tmp_path):
+    path = _write(tmp_path, """
+        [bots.bob]
+        transport = "http"
+        url = "https://bob.example.com/act"
+        max_response_bytes = 4096
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._max_response_bytes == 4096
+
+
+def test_http_max_response_bytes_default(tmp_path):
+    path = _write(tmp_path, """
+        [bots.bob]
+        transport = "http"
+        url = "https://bob.example.com/act"
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._max_response_bytes == 1_048_576
+
+
 def test_mcp_stdio_transport(tmp_path):
     path = _write(tmp_path, """
         [bots.carol]
