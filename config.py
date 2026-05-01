@@ -40,6 +40,9 @@ def _load_http(name, spec):
         timeout=spec.get("timeout", 5.0),
         verify=spec.get("verify", True),
         max_response_bytes=spec.get("max_response_bytes", 1_048_576),
+        hmac_secret=spec.get("hmac_secret"),
+        hmac_algorithm=spec.get("hmac_algorithm", "sha256"),
+        hmac_skew_seconds=spec.get("hmac_skew_seconds", 30),
     )
 
 

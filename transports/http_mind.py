@@ -7,6 +7,8 @@ URL and parses the action(s) from the response.
 
 Wire format (request):
     POST <url>
+    X-Cells-Timestamp: <unix_seconds>
+    X-Cells-Signature: HMAC(secret, "<ts>.<body_bytes>")  # when hmac_secret set
     {
       "view": <WorldView.to_json() output>,
       "messages": ["string", ...]
@@ -18,6 +20,10 @@ Wire format (response — single action):
 Wire format (response — pre-planned moves):
     {"actions": [{"type": <int>, "data": [...]}, ...]}
 
+When hmac_secret is configured both sides sign their payloads; the engine
+rejects responses with a missing, stale, or wrong signature (treated as
+malformed — engine falls back to last_action and the DQ layer strikes).
+
 A bot that times out, returns malformed JSON, or returns 5xx is treated
 the same way as a local mind that raised: the engine falls back to
 last_action and the strike will be counted by the DQ layer (#25).
@@ -25,12 +31,17 @@ last_action and the strike will be counted by the DQ layer (#25).
 
 from __future__ import annotations
 
+import hashlib
+import hmac as _hmac
 import json
+import time
 from typing import Any
 
 import httpx
 
 import cells
+
+_HMAC_ALGORITHMS = {"sha256": hashlib.sha256}
 
 
 def _parse_single(d: Any):
@@ -95,6 +106,9 @@ class HttpMind:
         transport: httpx.AsyncBaseTransport | None = None,
         verify: bool = True,
         max_response_bytes: int = 1_048_576,
+        hmac_secret: str | None = None,
+        hmac_algorithm: str = "sha256",
+        hmac_skew_seconds: int = 30,
     ):
         self.name = name
         self._url = url
@@ -102,6 +116,9 @@ class HttpMind:
         self._timeout = timeout
         self._verify = verify
         self._max_response_bytes = max_response_bytes
+        self._hmac_secret = hmac_secret
+        self._hmac_digestmod = _HMAC_ALGORITHMS.get(hmac_algorithm, hashlib.sha256)
+        self._hmac_skew_seconds = hmac_skew_seconds
         client_kwargs = {"timeout": timeout}
         if transport is not None:
             client_kwargs["transport"] = transport
@@ -113,6 +130,12 @@ class HttpMind:
             sys.stderr.write(
                 "warning: HttpMind %r constructed with verify=False; "
                 "TLS certificates will not be checked.\n" % name
+            )
+        if hmac_secret is None:
+            import sys
+            sys.stderr.write(
+                "warning: HttpMind %r constructed without hmac_secret; "
+                "requests will be unsigned and responses unverified.\n" % name
             )
 
         outer = self
@@ -126,16 +149,45 @@ class HttpMind:
 
         self.AgentMind = _AgentMind
 
+    def _sign(self, ts: str, body_bytes: bytes) -> str:
+        message = ts.encode() + b"." + body_bytes
+        return _hmac.new(
+            self._hmac_secret.encode(), message, self._hmac_digestmod
+        ).hexdigest()
+
+    def _verify_response(self, headers, body_bytes: bytes) -> bool:
+        ts_str = headers.get("X-Cells-Timestamp")
+        sig = headers.get("X-Cells-Signature")
+        if not ts_str or not sig:
+            return False
+        try:
+            ts = int(ts_str)
+        except ValueError:
+            return False
+        if abs(ts - int(time.time())) > self._hmac_skew_seconds:
+            return False
+        expected = self._sign(ts_str, body_bytes)
+        return _hmac.compare_digest(expected, sig)
+
     async def _post_capped(self, payload):
         """POST `payload` to the bot's URL, return the parsed JSON, or None
         on error or if the response exceeds `max_response_bytes` (#43).
 
+        When hmac_secret is set, signs the request body and verifies the
+        response signature; mismatched or stale signatures return None (#44).
+
         The body is streamed and the cap is checked after every chunk so a
         gigabyte response can't OOM the engine before the JSON decoder
         notices."""
+        body_bytes = json.dumps(payload).encode()
+        request_headers = {"Content-Type": "application/json", **self._headers}
+        if self._hmac_secret is not None:
+            ts = str(int(time.time()))
+            request_headers["X-Cells-Timestamp"] = ts
+            request_headers["X-Cells-Signature"] = self._sign(ts, body_bytes)
         try:
             async with self._client.stream(
-                "POST", self._url, json=payload, headers=self._headers
+                "POST", self._url, content=body_bytes, headers=request_headers
             ) as r:
                 r.raise_for_status()
                 body = bytearray()
@@ -143,7 +195,11 @@ class HttpMind:
                     body.extend(chunk)
                     if len(body) > self._max_response_bytes:
                         return None
-                return json.loads(bytes(body))
+                resp_bytes = bytes(body)
+                if self._hmac_secret is not None:
+                    if not self._verify_response(r.headers, resp_bytes):
+                        return None
+                return json.loads(resp_bytes)
         except (httpx.HTTPError, json.JSONDecodeError, ValueError):
             return None
 

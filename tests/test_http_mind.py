@@ -13,13 +13,35 @@ import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import hashlib
+import hmac as _hmac
 import json
+import time
 
 import httpx
 import pytest
 
 import cells
 from transports.http_mind import HttpMind
+
+
+def _hmac_sign(secret: str, ts: str, body_bytes: bytes) -> str:
+    msg = ts.encode() + b"." + body_bytes
+    return _hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _signed_response(secret: str, body_bytes: bytes, skew: int = 0) -> httpx.Response:
+    ts = str(int(time.time()) + skew)
+    sig = _hmac_sign(secret, ts, body_bytes)
+    return httpx.Response(
+        200,
+        content=body_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "X-Cells-Timestamp": ts,
+            "X-Cells-Signature": sig,
+        },
+    )
 
 
 def _make_mind(handler, name="bot"):
@@ -320,3 +342,117 @@ async def test_http_mind_plays_a_full_game():
         await g.tick()
     assert g.winner is not None
     await http_bot.aclose()
+
+
+# ---------------------------------------------------------------------------
+# HMAC mutual-auth tests (#44)
+# ---------------------------------------------------------------------------
+
+def test_hmac_no_secret_warns(capsys):
+    HttpMind("bot", "https://test.invalid/act")
+    captured = capsys.readouterr()
+    assert "hmac_secret" in captured.err
+    assert "unsigned" in captured.err
+
+
+def test_hmac_with_secret_no_unsigned_warn(capsys):
+    HttpMind("bot", "https://test.invalid/act", hmac_secret="s3cr3t")
+    captured = capsys.readouterr()
+    assert "unsigned" not in captured.err
+
+
+async def test_hmac_signed_response_accepted():
+    """Engine signs outbound request; bot signs response with same key → action decoded."""
+    SECRET = "shared-secret"
+    resp_body = json.dumps({"type": cells.ACT_EAT}).encode()
+    req_captured = {}
+
+    def handler(request):
+        req_captured["ts"] = request.headers.get("X-Cells-Timestamp")
+        req_captured["sig"] = request.headers.get("X-Cells-Signature")
+        # Verify the engine's request signature.
+        expected = _hmac_sign(SECRET, req_captured["ts"], request.content)
+        assert _hmac.compare_digest(expected, req_captured["sig"])
+        return _signed_response(SECRET, resp_body)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret=SECRET)
+    action = await mind.AgentMind(None).act(_make_view(), [])
+    assert isinstance(action, cells.Action)
+    assert action.type == cells.ACT_EAT
+    assert req_captured["ts"] is not None
+    assert req_captured["sig"] is not None
+    await mind.aclose()
+
+
+async def test_hmac_mismatched_response_secret_returns_none():
+    """Bot signs response with wrong key — engine rejects, returns None → strike."""
+    resp_body = json.dumps({"type": cells.ACT_EAT}).encode()
+
+    def handler(request):
+        return _signed_response("wrong-secret", resp_body)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="correct-secret")
+    result = await mind.AgentMind(None).act(_make_view(), [])
+    assert result is None
+    await mind.aclose()
+
+
+async def test_hmac_stale_response_timestamp_returns_none():
+    """Response timestamp older than skew window — engine rejects."""
+    resp_body = json.dumps({"type": cells.ACT_EAT}).encode()
+
+    def handler(request):
+        return _signed_response("s3cr3t", resp_body, skew=-60)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="s3cr3t")
+    result = await mind.AgentMind(None).act(_make_view(), [])
+    assert result is None
+    await mind.aclose()
+
+
+async def test_hmac_missing_response_headers_returns_none():
+    """Bot returns no signature headers — engine rejects."""
+    def handler(request):
+        return httpx.Response(200, json={"type": cells.ACT_EAT})
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="s3cr3t")
+    result = await mind.AgentMind(None).act(_make_view(), [])
+    assert result is None
+    await mind.aclose()
+
+
+async def test_hmac_batch_signed_round_trip():
+    """act_batch signs the batch request; bot signs response — result decoded."""
+    SECRET = "batch-secret"
+    resp_body = json.dumps(
+        {"actions": [{"id": "agent-0", "action": {"type": cells.ACT_EAT}}]}
+    ).encode()
+
+    def handler(request):
+        return _signed_response(SECRET, resp_body)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret=SECRET)
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out["agent-0"].type == cells.ACT_EAT
+    await mind.aclose()
+
+
+async def test_hmac_batch_bad_response_signature_returns_empty():
+    """act_batch with mismatched response signature → {} → engine strikes all agents."""
+    resp_body = json.dumps(
+        {"actions": [{"id": "agent-0", "action": {"type": cells.ACT_EAT}}]}
+    ).encode()
+
+    def handler(request):
+        return _signed_response("wrong-secret", resp_body)
+
+    transport = httpx.MockTransport(handler)
+    mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="correct-secret")
+    out = await mind.act_batch([("agent-0", _make_view())], [])
+    assert out == {}
+    await mind.aclose()
