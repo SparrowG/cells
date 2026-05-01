@@ -39,6 +39,7 @@ def _load_http(name, spec):
         headers=spec.get("headers"),
         timeout=spec.get("timeout", 5.0),
         verify=spec.get("verify", True),
+        max_response_bytes=spec.get("max_response_bytes", 1_048_576),
     )
 
 

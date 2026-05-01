@@ -94,12 +94,14 @@ class HttpMind:
         timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
         verify: bool = True,
+        max_response_bytes: int = 1_048_576,
     ):
         self.name = name
         self._url = url
         self._headers = headers or {}
         self._timeout = timeout
         self._verify = verify
+        self._max_response_bytes = max_response_bytes
         client_kwargs = {"timeout": timeout}
         if transport is not None:
             client_kwargs["transport"] = transport
@@ -124,17 +126,33 @@ class HttpMind:
 
         self.AgentMind = _AgentMind
 
+    async def _post_capped(self, payload):
+        """POST `payload` to the bot's URL, return the parsed JSON, or None
+        on error or if the response exceeds `max_response_bytes` (#43).
+
+        The body is streamed and the cap is checked after every chunk so a
+        gigabyte response can't OOM the engine before the JSON decoder
+        notices."""
+        try:
+            async with self._client.stream(
+                "POST", self._url, json=payload, headers=self._headers
+            ) as r:
+                r.raise_for_status()
+                body = bytearray()
+                async for chunk in r.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > self._max_response_bytes:
+                        return None
+                return json.loads(bytes(body))
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return None
+
     async def _call(self, view, msg):
         payload = {
             "view": view.to_json(),
             "messages": list(msg),
         }
-        try:
-            r = await self._client.post(self._url, json=payload, headers=self._headers)
-            r.raise_for_status()
-            return _parse_action(r.json())
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
-            return None
+        return _parse_action(await self._post_capped(payload))
 
     async def act_batch(self, agents, msg):
         """Per-team batch endpoint (#23). `agents` is a list of
@@ -146,12 +164,10 @@ class HttpMind:
             "messages": list(msg),
             "agents": [{"id": aid, "view": v.to_json()} for (aid, v) in agents],
         }
-        try:
-            r = await self._client.post(self._url, json=payload, headers=self._headers)
-            r.raise_for_status()
-            return _parse_batch_response(r.json())
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+        raw = await self._post_capped(payload)
+        if raw is None:
             return {}
+        return _parse_batch_response(raw)
 
     async def aclose(self):
         await self._client.aclose()
