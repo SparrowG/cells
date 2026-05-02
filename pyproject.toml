@@ -1,0 +1,30 @@
+[build-system]
+requires = [
+    "setuptools>=68",
+    "wheel",
+    # Build-time deps for cells_helpers.pyx (see setup.py).
+    "Cython>=3.0",
+    "numpy>=1.24",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cells"
+version = "0.1.0"
+description = "A multi-agent Python programming game."
+readme = "README"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "pygame>=2.5",
+    "httpx>=0.27",
+    "mcp>=1.0",
+]
+
+[tool.setuptools]
+# Top-level Python files installed alongside the Cython extension.
+py-modules = ["cells", "tournament", "config"]
+
+[tool.setuptools.packages.find]
+# Include only the in-tree subpackages cells ships; avoid sweeping up tests/.
+include = ["minds*", "terrain*", "transports*"]
