@@ -49,12 +49,11 @@ def _apply_limits_to_command(command: list[str], limits: dict) -> list[str]:
         return command
     stmts = ["import resource,os,sys"]
     if memory_mb is not None:
-        b = memory_mb * 1024 * 1024
+        b = int(memory_mb) * 1024 * 1024
         stmts.append(f"resource.setrlimit(resource.RLIMIT_AS,({b},{b}))")
     if cpu_seconds is not None:
-        stmts.append(
-            f"resource.setrlimit(resource.RLIMIT_CPU,({cpu_seconds},{cpu_seconds}))"
-        )
+        s = int(cpu_seconds)
+        stmts.append(f"resource.setrlimit(resource.RLIMIT_CPU,({s},{s}))")
     stmts.append("os.execvp(sys.argv[1],sys.argv[1:])")
     return [sys.executable, "-c", ";".join(stmts)] + list(command)
 

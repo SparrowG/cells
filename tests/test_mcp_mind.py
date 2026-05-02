@@ -234,7 +234,7 @@ def test_apply_limits_cpu_wraps_command():
     assert result[0] == sys.executable
     assert result[1] == "-c"
     assert "RLIMIT_CPU" in result[2]
-    assert "60" in result[2]
+    assert "(60,60)" in result[2]
     assert result[3:] == cmd
 
 
@@ -246,13 +246,25 @@ def test_apply_limits_both_caps_include_both_rlimits():
     assert "RLIMIT_AS" in result[2]
     assert "RLIMIT_CPU" in result[2]
     assert str(128 * 1024 * 1024) in result[2]
-    assert "30" in result[2]
+    assert "(30,30)" in result[2]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
 def test_apply_limits_wrapper_ends_with_execvp():
     result = _apply_limits_to_command(["python", "bot.py"], {"cpu_seconds": 5})
     assert "execvp" in result[2]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_float_values_cast_to_int():
+    """Float TOML values (e.g. cpu_seconds = 60.9) must not produce a
+    TypeError inside the subprocess wrapper."""
+    result = _apply_limits_to_command(
+        ["python", "bot.py"], {"memory_mb": 256.0, "cpu_seconds": 60.9}
+    )
+    # Both limits must appear as plain integers in the one-liner.
+    assert "(268435456,268435456)" in result[2]
+    assert "(60,60)" in result[2]
 
 
 async def test_no_limits_no_walltime_task():
