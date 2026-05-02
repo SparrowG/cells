@@ -52,7 +52,11 @@ def _load_mcp(name, spec):
         command = spec.get("command")
         if not command:
             raise ValueError("bot %r (mcp/stdio) requires 'command'" % name)
-        return McpMind(name, server_command=list(command))
+        return McpMind(
+            name,
+            server_command=list(command),
+            limits=spec.get("limits", {}),
+        )
     if mode == "sse":
         url = spec.get("url")
         if not url:

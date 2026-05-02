@@ -17,17 +17,46 @@ Two transports are supported:
 Errors (connection drop, malformed payload, server-reported error) are
 swallowed: act() returns None and the engine falls back to last_action.
 The DQ layer (#25) is responsible for counting strikes.
+
+Resource limits (#45): stdio minds accept a `limits` dict with optional
+keys memory_mb, cpu_seconds, and walltime_seconds. On POSIX, memory and
+CPU caps are applied via a thin wrapper that calls resource.setrlimit
+before exec-ing the real server. Walltime is enforced by an asyncio task
+that tears down the session when it expires. All limits are no-ops on
+Windows.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
 from contextlib import AsyncExitStack
 from typing import Any
 
 from transports.http_mind import _parse_action, _parse_batch_response
 
 import cells
+
+
+def _apply_limits_to_command(command: list[str], limits: dict) -> list[str]:
+    """On POSIX, prepend a Python one-liner that sets RLIMIT_AS / RLIMIT_CPU
+    before exec-ing the real server command. Returns command unchanged on
+    Windows or when neither cap is requested."""
+    memory_mb = limits.get("memory_mb")
+    cpu_seconds = limits.get("cpu_seconds")
+    if sys.platform == "win32" or (memory_mb is None and cpu_seconds is None):
+        return command
+    stmts = ["import resource,os,sys"]
+    if memory_mb is not None:
+        b = memory_mb * 1024 * 1024
+        stmts.append(f"resource.setrlimit(resource.RLIMIT_AS,({b},{b}))")
+    if cpu_seconds is not None:
+        stmts.append(
+            f"resource.setrlimit(resource.RLIMIT_CPU,({cpu_seconds},{cpu_seconds}))"
+        )
+    stmts.append("os.execvp(sys.argv[1],sys.argv[1:])")
+    return [sys.executable, "-c", ";".join(stmts)] + list(command)
 
 
 def _parse_result(result) -> Any:
@@ -82,6 +111,7 @@ class McpMind:
         server_command: list[str] | None = None,
         server_url: str | None = None,
         session=None,
+        limits: dict | None = None,
     ):
         if (server_command is None) == (server_url is None) and session is None:
             raise ValueError(
@@ -92,6 +122,9 @@ class McpMind:
         self._server_url = server_url
         self._session = session
         self._stack: AsyncExitStack | None = None
+        self._limits: dict = limits or {}
+        self._walltime_task: asyncio.Task | None = None
+        self._walltime_started = False
 
         outer = self
 
@@ -105,29 +138,43 @@ class McpMind:
         self.AgentMind = _AgentMind
 
     async def _ensure_session(self):
-        if self._session is not None:
-            return
-        from mcp import ClientSession
-        from mcp.client.stdio import StdioServerParameters, stdio_client
+        if self._session is None:
+            from mcp import ClientSession
+            from mcp.client.stdio import StdioServerParameters, stdio_client
 
-        self._stack = AsyncExitStack()
-        if self._server_command is not None:
-            params = StdioServerParameters(
-                command=self._server_command[0],
-                args=list(self._server_command[1:]),
+            self._stack = AsyncExitStack()
+            if self._server_command is not None:
+                effective_command = _apply_limits_to_command(
+                    self._server_command, self._limits
+                )
+                params = StdioServerParameters(
+                    command=effective_command[0],
+                    args=list(effective_command[1:]),
+                )
+                read, write = await self._stack.enter_async_context(stdio_client(params))
+            else:
+                from mcp.client.sse import sse_client
+
+                read, write = await self._stack.enter_async_context(
+                    sse_client(self._server_url)
+                )
+
+            self._session = await self._stack.enter_async_context(
+                ClientSession(read, write)
             )
-            read, write = await self._stack.enter_async_context(stdio_client(params))
-        else:
-            from mcp.client.sse import sse_client
+            await self._session.initialize()
 
-            read, write = await self._stack.enter_async_context(
-                sse_client(self._server_url)
-            )
+        if not self._walltime_started:
+            self._walltime_started = True
+            walltime = self._limits.get("walltime_seconds")
+            if walltime is not None:
+                self._walltime_task = asyncio.get_running_loop().create_task(
+                    self._enforce_walltime(walltime)
+                )
 
-        self._session = await self._stack.enter_async_context(
-            ClientSession(read, write)
-        )
-        await self._session.initialize()
+    async def _enforce_walltime(self, seconds: float):
+        await asyncio.sleep(seconds)
+        await self.aclose()
 
     async def _call(self, view, msg):
         try:
@@ -158,6 +205,10 @@ class McpMind:
         return _parse_batch_result(result)
 
     async def aclose(self):
+        task = self._walltime_task
+        self._walltime_task = None
+        if task is not None and not task.done() and asyncio.current_task() is not task:
+            task.cancel()
         if self._stack is not None:
             await self._stack.aclose()
             self._stack = None
