@@ -290,6 +290,45 @@ def test_select_bots_unknown_name_raises(tmp_path):
         select_bots(mind_list, ["alice", "ghost"])
 
 
+def test_mcp_stdio_limits_propagate(tmp_path):
+    path = _write(tmp_path, """
+        [bots.carol]
+        transport = "mcp"
+        mode = "stdio"
+        command = ["python", "bots/carol_server.py"]
+        limits = { memory_mb = 256, cpu_seconds = 60, walltime_seconds = 600 }
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert isinstance(mind, McpMind)
+    assert mind._limits == {"memory_mb": 256, "cpu_seconds": 60, "walltime_seconds": 600}
+
+
+def test_mcp_stdio_no_limits_defaults_to_empty(tmp_path):
+    path = _write(tmp_path, """
+        [bots.carol]
+        transport = "mcp"
+        mode = "stdio"
+        command = ["python", "bots/carol_server.py"]
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._limits == {}
+
+
+def test_mcp_stdio_partial_limits_propagate(tmp_path):
+    path = _write(tmp_path, """
+        [bots.carol]
+        transport = "mcp"
+        mode = "stdio"
+        command = ["python", "bots/carol_server.py"]
+        limits = { walltime_seconds = 300 }
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert mind._limits == {"walltime_seconds": 300}
+
+
 # ---------------------------------------------------------------------------
 # CLI integration via subprocess.
 

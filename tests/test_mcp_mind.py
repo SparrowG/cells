@@ -9,13 +9,15 @@ import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import asyncio
 import json
+import sys
 
 import pytest
 from mcp.types import CallToolResult, TextContent
 
 import cells
-from transports.mcp_mind import McpMind
+from transports.mcp_mind import McpMind, _apply_limits_to_command
 
 
 class FakeSession:
@@ -202,3 +204,128 @@ def test_constructor_requires_one_transport():
             server_command=["python", "x.py"],
             server_url="http://example/sse",
         )
+
+
+# ---------------------------------------------------------------------------
+# Resource caps (#45)
+
+
+def test_apply_limits_no_limits_returns_command_unchanged():
+    cmd = ["python", "bot.py", "--arg"]
+    assert _apply_limits_to_command(cmd, {}) == cmd
+    assert _apply_limits_to_command(cmd, {"walltime_seconds": 600}) == cmd
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_memory_wraps_command():
+    cmd = ["python", "bot.py", "--arg"]
+    result = _apply_limits_to_command(cmd, {"memory_mb": 256})
+    assert result[0] == sys.executable
+    assert result[1] == "-c"
+    assert "RLIMIT_AS" in result[2]
+    assert str(256 * 1024 * 1024) in result[2]
+    assert result[3:] == cmd
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_cpu_wraps_command():
+    cmd = ["python", "bot.py"]
+    result = _apply_limits_to_command(cmd, {"cpu_seconds": 60})
+    assert result[0] == sys.executable
+    assert result[1] == "-c"
+    assert "RLIMIT_CPU" in result[2]
+    assert "(60,60)" in result[2]
+    assert result[3:] == cmd
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_both_caps_include_both_rlimits():
+    result = _apply_limits_to_command(
+        ["python", "bot.py"], {"memory_mb": 128, "cpu_seconds": 30}
+    )
+    assert "RLIMIT_AS" in result[2]
+    assert "RLIMIT_CPU" in result[2]
+    assert str(128 * 1024 * 1024) in result[2]
+    assert "(30,30)" in result[2]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_wrapper_ends_with_execvp():
+    result = _apply_limits_to_command(["python", "bot.py"], {"cpu_seconds": 5})
+    assert "execvp" in result[2]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
+def test_apply_limits_float_values_cast_to_int():
+    """Float TOML values (e.g. cpu_seconds = 60.9) must not produce a
+    TypeError inside the subprocess wrapper."""
+    result = _apply_limits_to_command(
+        ["python", "bot.py"], {"memory_mb": 256.0, "cpu_seconds": 60.9}
+    )
+    # Both limits must appear as plain integers in the one-liner.
+    assert "(268435456,268435456)" in result[2]
+    assert "(60,60)" in result[2]
+
+
+async def test_no_limits_no_walltime_task():
+    """When no limits are configured, no walltime task is created."""
+    session = FakeSession(structured={"type": cells.ACT_EAT})
+    mind = McpMind("bot", session=session)
+    agent = mind.AgentMind(None)
+    await agent.act(_make_view(), [])
+    assert mind._walltime_task is None
+
+
+async def test_walltime_task_started_on_first_act():
+    """A walltime task is created on the first act() call."""
+    session = FakeSession(structured={"type": cells.ACT_EAT})
+    mind = McpMind("bot", session=session, limits={"walltime_seconds": 60.0})
+    agent = mind.AgentMind(None)
+    assert mind._walltime_task is None
+    await agent.act(_make_view(), [])
+    assert mind._walltime_task is not None
+    assert not mind._walltime_task.done()
+    # Clean up so the task doesn't outlive the test.
+    await mind.aclose()
+    await asyncio.sleep(0)
+
+
+async def test_walltime_closes_session_after_expiry():
+    """After walltime_seconds elapses, the session is torn down and
+    subsequent act() calls return None (counted as strikes by the DQ layer)."""
+    session = FakeSession(structured={"type": cells.ACT_EAT})
+    mind = McpMind("bot", session=session, limits={"walltime_seconds": 0.05})
+    agent = mind.AgentMind(None)
+
+    result = await agent.act(_make_view(), [])
+    assert result is not None
+
+    await asyncio.sleep(0.15)
+
+    result = await agent.act(_make_view(), [])
+    assert result is None
+
+
+async def test_aclose_cancels_pending_walltime_task():
+    """Calling aclose() before walltime fires cancels the pending task."""
+    session = FakeSession(structured={"type": cells.ACT_EAT})
+    mind = McpMind("bot", session=session, limits={"walltime_seconds": 60.0})
+    agent = mind.AgentMind(None)
+
+    await agent.act(_make_view(), [])
+    task = mind._walltime_task
+    assert task is not None
+
+    await mind.aclose()
+    assert mind._walltime_task is None
+
+    await asyncio.sleep(0)
+    assert task.cancelled()
+
+
+async def test_walltime_only_config_does_not_wrap_command():
+    """walltime_seconds alone must not alter the server command — it only
+    affects the asyncio side, not the subprocess invocation."""
+    cmd = ["python", "bot.py"]
+    result = _apply_limits_to_command(cmd, {"walltime_seconds": 600})
+    assert result == cmd

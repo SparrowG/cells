@@ -50,10 +50,17 @@ max_response_bytes = 1048576
 
 # MCP mind via stdio: cells spawns the contestant's server as a
 # subprocess and calls the `act` (or `act_batch`) tool over stdio.
+#
+# Optional `limits` inline table caps subprocess resource usage (#45).
+# All three keys are optional; omit the whole table to disable enforcement.
+# memory_mb and cpu_seconds use resource.setrlimit (POSIX only; ignored
+# on Windows). walltime_seconds is enforced by an asyncio task that
+# closes the session when the subprocess overruns its wall-clock budget.
 [bots.carol]
 transport = "mcp"
 mode = "stdio"
 command = ["python", "bots/carol_server.py"]
+limits = { memory_mb = 256, cpu_seconds = 60, walltime_seconds = 600 }
 
 # MCP mind via SSE: cells connects to a hosted MCP endpoint.
 [bots.dave]
