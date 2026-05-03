@@ -330,6 +330,57 @@ def test_mcp_stdio_partial_limits_propagate(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Sandbox (#46)
+
+def test_in_process_subprocess_sandbox_returns_mcpmind(tmp_path):
+    path = _write(tmp_path, """
+        [bots.alice]
+        transport = "in_process"
+        module = "minds.mind1"
+        sandbox = "subprocess"
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert isinstance(mind, McpMind)
+    assert mind.name == "alice"
+
+
+def test_in_process_no_sandbox_returns_module(tmp_path):
+    path = _write(tmp_path, """
+        [bots.alice]
+        transport = "in_process"
+        module = "minds.mind1"
+        sandbox = "none"
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert not isinstance(mind, McpMind)
+    assert hasattr(mind, "AgentMind")
+
+
+def test_in_process_default_sandbox_is_none(tmp_path):
+    path = _write(tmp_path, """
+        [bots.alice]
+        transport = "in_process"
+        module = "minds.mind1"
+    """)
+    mind_list, _ = load_bots(path)
+    _, mind = mind_list[0]
+    assert not isinstance(mind, McpMind)
+
+
+def test_in_process_unknown_sandbox_raises(tmp_path):
+    path = _write(tmp_path, """
+        [bots.alice]
+        transport = "in_process"
+        module = "minds.mind1"
+        sandbox = "restricted"
+    """)
+    with pytest.raises(ValueError, match="unknown sandbox"):
+        load_bots(path)
+
+
+# ---------------------------------------------------------------------------
 # CLI integration via subprocess.
 
 def _cells(args, cwd, timeout=30):

@@ -11,9 +11,16 @@
 
 # In-process mind: imported directly into the engine. Lowest latency,
 # no network roundtrip. `module` is a Python import path.
+#
+# Optional `sandbox` key (#46):
+#   "none"       (default) -- imported directly, shared address space
+#   "subprocess" -- forked into its own Python process, communicates via
+#                   MCP stdio; provides process-level memory isolation
+#                   without resource caps (add mcp/stdio `limits` for those)
 [bots.alice]
 transport = "in_process"
 module = "minds.mind1"
+# sandbox = "subprocess"  # opt-in process isolation
 
 # HTTP mind: cells POSTs the per-tick world view (or the per-team
 # batch payload, see #23) to `url`. Optional `headers` for auth,
