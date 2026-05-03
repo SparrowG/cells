@@ -19,11 +19,25 @@ from pathlib import Path
 from transports.http_mind import HttpMind
 from transports.mcp_mind import McpMind
 
+_INPROC_SERVER = str(
+    Path(__file__).resolve().parent / "transports" / "in_process_server.py"
+)
+
 
 def _load_in_process(name, spec):
     module_path = spec.get("module")
     if not module_path:
         raise ValueError("bot %r (in_process) requires 'module'" % name)
+    sandbox = spec.get("sandbox", "none")
+    if sandbox == "subprocess":
+        return McpMind(
+            name,
+            server_command=[sys.executable, _INPROC_SERVER, module_path],
+        )
+    if sandbox != "none":
+        raise ValueError(
+            "bot %r has unknown sandbox %r; use 'subprocess' or 'none'" % (name, sandbox)
+        )
     mind = importlib.import_module(module_path)
     mind.name = name
     return mind
