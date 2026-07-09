@@ -95,6 +95,27 @@ class _PatchLayer:
         return None
 
 
+class _MessageQueueProxy:
+    """Read-only stand-in for cells.MessageQueue inside the sandbox (#55).
+
+    Wraps the plain JSON-decoded messages list received over the wire so
+    existing minds can call msg.get_messages() unchanged. send_message()
+    is a no-op: there is currently no wire mechanism (#53) for a
+    subprocess-sandboxed mind to broadcast a message back to the engine.
+    """
+
+    __slots__ = ("_messages",)
+
+    def __init__(self, messages: list):
+        self._messages = messages
+
+    def get_messages(self):
+        return self._messages
+
+    def send_message(self, m):
+        pass
+
+
 class _WorldViewProxy:
     """Reconstructs the WorldView interface from a to_json() snapshot dict."""
 
@@ -162,16 +183,18 @@ def main():
         nonlocal _default_agent
         if _default_agent is None:
             _default_agent = mind_module.AgentMind([])
-        return _result_to_json(_default_agent.act(_WorldViewProxy(view), messages))
+        msg = _MessageQueueProxy(messages)
+        return _result_to_json(_default_agent.act(_WorldViewProxy(view), msg))
 
     @server.tool()
     def act_batch(tick: int, agents: list, messages: list) -> dict:
+        msg = _MessageQueueProxy(messages)
         results = []
         for entry in agents:
             aid = entry["id"]
             if aid not in _agents:
                 _agents[aid] = mind_module.AgentMind([])
-            result = _agents[aid].act(_WorldViewProxy(entry["view"]), messages)
+            result = _agents[aid].act(_WorldViewProxy(entry["view"]), msg)
             results.append({"id": aid, "action": _result_to_json(result)})
         return {"actions": results}
 
