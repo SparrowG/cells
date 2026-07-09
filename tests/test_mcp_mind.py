@@ -59,11 +59,49 @@ def _make_view():
     return cells.WorldView(_StubAgent(), [], [], terr, energy, tick=1)
 
 
+def _msgs(*items):
+    """A real cells.MessageQueue, as the engine always passes to
+    act()/act_batch() — never a plain list (#53)."""
+    q = cells.MessageQueue()
+    for item in items:
+        q.send_message(item)
+    q.update()
+    return q
+
+
+async def test_act_serializes_real_message_queue():
+    """The engine always calls act()/act_batch() with a live
+    cells.MessageQueue (#53), not a plain list — list(msg) isn't
+    iterable and raised TypeError (silently swallowed by _call's
+    bare except, returning None) before every request could be sent."""
+    queue = cells.MessageQueue()
+    queue.send_message("hello")
+    queue.update()
+
+    session = FakeSession(structured={"type": 2})
+    mind = McpMind("bot", session=session)
+    agent = mind.AgentMind(None)
+    action = await agent.act(_make_view(), queue)
+    assert action.type == cells.ACT_EAT
+    assert session.calls[0][1]["messages"] == ["hello"]
+
+
+async def test_act_batch_serializes_real_message_queue():
+    queue = cells.MessageQueue()
+    queue.send_message("gg")
+    queue.update()
+
+    session = FakeSession(structured={"actions": []})
+    mind = McpMind("bot", session=session)
+    await mind.act_batch([("agent-0", _make_view())], queue)
+    assert session.calls[0][1]["messages"] == ["gg"]
+
+
 async def test_structured_content_action():
     session = FakeSession(structured={"type": 2})
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    action = await agent.act(_make_view(), [])
+    action = await agent.act(_make_view(), _msgs())
     assert action.type == cells.ACT_EAT
     # Verify the call_tool args carry the snapshot.
     assert session.calls[0][0] == "act"
@@ -75,7 +113,7 @@ async def test_text_content_action():
     session = FakeSession(text=json.dumps({"type": 1, "data": [3, 4]}))
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    action = await agent.act(_make_view(), [])
+    action = await agent.act(_make_view(), _msgs())
     assert action.type == cells.ACT_MOVE
     assert action.get_data() == [3, 4]
 
@@ -91,7 +129,7 @@ async def test_pre_planned_moves_via_structured():
     )
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    actions = await agent.act(_make_view(), [])
+    actions = await agent.act(_make_view(), _msgs())
     assert len(actions) == 2
     assert actions[0].type == cells.ACT_MOVE
     assert actions[1].type == cells.ACT_EAT
@@ -101,7 +139,7 @@ async def test_is_error_returns_none():
     session = FakeSession(structured={"type": 2}, is_error=True)
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
 
 
@@ -109,7 +147,7 @@ async def test_call_tool_raises_returns_none():
     session = FakeSession(raises=RuntimeError("connection dropped"))
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
 
 
@@ -117,7 +155,7 @@ async def test_text_content_malformed_returns_none():
     session = FakeSession(text="not json at all")
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
 
 
@@ -134,7 +172,7 @@ async def test_act_batch_round_trip():
     )
     mind = McpMind("bot", session=session)
     out = await mind.act_batch(
-        [("agent-0", _make_view()), ("agent-1", _make_view())], ["hello"]
+        [("agent-0", _make_view()), ("agent-1", _make_view())], _msgs("hello")
     )
     assert session.calls[0][0] == "act_batch"
     args = session.calls[0][1]
@@ -150,21 +188,21 @@ async def test_act_batch_text_content():
     payload = {"actions": [{"id": "agent-0", "action": {"type": cells.ACT_EAT}}]}
     session = FakeSession(text=json.dumps(payload))
     mind = McpMind("bot", session=session)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out["agent-0"].type == cells.ACT_EAT
 
 
 async def test_act_batch_call_raises_returns_empty():
     session = FakeSession(raises=RuntimeError("boom"))
     mind = McpMind("bot", session=session)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out == {}
 
 
 async def test_act_batch_is_error_returns_empty():
     session = FakeSession(structured={"actions": []}, is_error=True)
     mind = McpMind("bot", session=session)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out == {}
 
 
@@ -272,7 +310,7 @@ async def test_no_limits_no_walltime_task():
     session = FakeSession(structured={"type": cells.ACT_EAT})
     mind = McpMind("bot", session=session)
     agent = mind.AgentMind(None)
-    await agent.act(_make_view(), [])
+    await agent.act(_make_view(), _msgs())
     assert mind._walltime_task is None
 
 
@@ -282,7 +320,7 @@ async def test_walltime_task_started_on_first_act():
     mind = McpMind("bot", session=session, limits={"walltime_seconds": 60.0})
     agent = mind.AgentMind(None)
     assert mind._walltime_task is None
-    await agent.act(_make_view(), [])
+    await agent.act(_make_view(), _msgs())
     assert mind._walltime_task is not None
     assert not mind._walltime_task.done()
     # Clean up so the task doesn't outlive the test.
@@ -297,12 +335,12 @@ async def test_walltime_closes_session_after_expiry():
     mind = McpMind("bot", session=session, limits={"walltime_seconds": 0.05})
     agent = mind.AgentMind(None)
 
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is not None
 
     await asyncio.sleep(0.15)
 
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
 
 
@@ -312,7 +350,7 @@ async def test_aclose_cancels_pending_walltime_task():
     mind = McpMind("bot", session=session, limits={"walltime_seconds": 60.0})
     agent = mind.AgentMind(None)
 
-    await agent.act(_make_view(), [])
+    await agent.act(_make_view(), _msgs())
     task = mind._walltime_task
     assert task is not None
 
