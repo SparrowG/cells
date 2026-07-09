@@ -206,7 +206,7 @@ class HttpMind:
     async def _call(self, view, msg):
         payload = {
             "view": view.to_json(),
-            "messages": list(msg),
+            "messages": msg.get_messages(),
         }
         return _parse_action(await self._post_capped(payload))
 
@@ -217,7 +217,7 @@ class HttpMind:
             return {}
         payload = {
             "tick": int(agents[0][1].tick),
-            "messages": list(msg),
+            "messages": msg.get_messages(),
             "agents": [{"id": aid, "view": v.to_json()} for (aid, v) in agents],
         }
         raw = await self._post_capped(payload)

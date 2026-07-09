@@ -180,7 +180,7 @@ class McpMind:
             await self._ensure_session()
             result = await self._session.call_tool(
                 "act",
-                arguments={"view": view.to_json(), "messages": list(msg)},
+                arguments={"view": view.to_json(), "messages": msg.get_messages()},
             )
             return _parse_result(result)
         except Exception:
@@ -193,7 +193,7 @@ class McpMind:
             return {}
         arguments = {
             "tick": int(agents[0][1].tick),
-            "messages": list(msg),
+            "messages": msg.get_messages(),
             "agents": [{"id": aid, "view": v.to_json()} for (aid, v) in agents],
         }
         try:

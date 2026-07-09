@@ -168,7 +168,9 @@ async def test_subprocess_server_returns_action():
     )
     agent = mind.AgentMind(None)
     view = _make_view()
-    result = await agent.act(view, [])
+    # The engine always calls act()/act_batch() with a live
+    # cells.MessageQueue, never a plain list (#53).
+    result = await agent.act(view, cells.MessageQueue())
     await mind.aclose()
     assert result is not None
     assert hasattr(result, "type")
@@ -184,7 +186,7 @@ async def test_subprocess_server_act_batch():
     view1 = _make_view(x=3, y=3)
     view2 = _make_view(x=7, y=7)
     out = await mind.act_batch(
-        [("agent-1", view1), ("agent-2", view2)], []
+        [("agent-1", view1), ("agent-2", view2)], cells.MessageQueue()
     )
     await mind.aclose()
     assert "agent-1" in out

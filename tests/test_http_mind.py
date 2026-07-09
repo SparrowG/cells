@@ -67,6 +67,55 @@ def _make_view():
     return cells.WorldView(me, [], [], terr, energy, tick=1)
 
 
+def _msgs(*items):
+    """A real cells.MessageQueue, as the engine always passes to
+    act()/act_batch() — never a plain list (#53)."""
+    q = cells.MessageQueue()
+    for item in items:
+        q.send_message(item)
+    q.update()
+    return q
+
+
+async def test_act_serializes_real_message_queue():
+    """The engine always calls act()/act_batch() with a live
+    cells.MessageQueue (#53), not a plain list — list(msg) isn't
+    iterable and raised TypeError before every request could be sent."""
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"type": 2})
+
+    queue = cells.MessageQueue()
+    queue.send_message("hello")
+    queue.update()
+
+    mind = _make_mind(handler)
+    agent = mind.AgentMind(None)
+    action = await agent.act(_make_view(), queue)
+    assert isinstance(action, cells.Action)
+    assert captured["body"]["messages"] == ["hello"]
+    await mind.aclose()
+
+
+async def test_act_batch_serializes_real_message_queue():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"actions": []})
+
+    queue = cells.MessageQueue()
+    queue.send_message("gg")
+    queue.update()
+
+    mind = _make_mind(handler)
+    await mind.act_batch([("agent-0", _make_view())], queue)
+    assert captured["body"]["messages"] == ["gg"]
+    await mind.aclose()
+
+
 async def test_single_action_response():
     captured = {}
 
@@ -76,7 +125,7 @@ async def test_single_action_response():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    action = await agent.act(_make_view(), [])
+    action = await agent.act(_make_view(), _msgs())
     assert isinstance(action, cells.Action)
     assert action.type == cells.ACT_EAT
     # Verify the request body has the snapshot schema.
@@ -92,7 +141,7 @@ async def test_action_with_data_field():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    action = await agent.act(_make_view(), [])
+    action = await agent.act(_make_view(), _msgs())
     assert action.type == cells.ACT_MOVE
     assert action.get_data() == [3, 4]
     await mind.aclose()
@@ -112,7 +161,7 @@ async def test_pre_planned_moves_response():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    actions = await agent.act(_make_view(), [])
+    actions = await agent.act(_make_view(), _msgs())
     assert isinstance(actions, list)
     assert len(actions) == 2
     assert actions[0].type == cells.ACT_MOVE
@@ -128,7 +177,7 @@ async def test_malformed_response_returns_none():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -139,7 +188,7 @@ async def test_5xx_response_returns_none():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -150,7 +199,7 @@ async def test_response_missing_type_returns_none():
 
     mind = _make_mind(handler)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -175,7 +224,7 @@ async def test_act_batch_round_trip():
     mind = _make_mind(handler)
     v0 = _make_view()
     v1 = _make_view()
-    out = await mind.act_batch([("agent-0", v0), ("agent-1", v1)], ["hello"])
+    out = await mind.act_batch([("agent-0", v0), ("agent-1", v1)], _msgs("hello"))
 
     body = captured["body"]
     assert body["tick"] == 1
@@ -195,7 +244,7 @@ async def test_act_batch_http_error_returns_empty():
         return httpx.Response(500, text="upstream error")
 
     mind = _make_mind(handler)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out == {}
     await mind.aclose()
 
@@ -211,7 +260,7 @@ async def test_act_batch_partial_response():
 
     mind = _make_mind(handler)
     out = await mind.act_batch(
-        [("agent-0", _make_view()), ("agent-1", _make_view())], []
+        [("agent-0", _make_view()), ("agent-1", _make_view())], _msgs()
     )
     assert "agent-0" not in out
     assert out["agent-1"].type == cells.ACT_LIFT
@@ -234,7 +283,7 @@ async def test_oversized_response_returns_none():
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -249,7 +298,7 @@ async def test_response_just_under_cap_decoded_normally():
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000_000)
     agent = mind.AgentMind(None)
-    result = await agent.act(_make_view(), [])
+    result = await agent.act(_make_view(), _msgs())
     assert isinstance(result, cells.Action)
     assert result.type == cells.ACT_EAT
     await mind.aclose()
@@ -268,7 +317,7 @@ async def test_oversized_batch_response_returns_empty_dict():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, max_response_bytes=1_000)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out == {}
     await mind.aclose()
 
@@ -285,7 +334,7 @@ async def test_default_cap_handles_realistic_batch_response():
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport)
     out = await mind.act_batch(
-        [(f"agent-{i}", _make_view()) for i in range(50)], []
+        [(f"agent-{i}", _make_view()) for i in range(50)], _msgs()
     )
     assert len(out) == 50
     assert all(a.type == cells.ACT_EAT for a in out.values())
@@ -377,7 +426,7 @@ async def test_hmac_signed_response_accepted():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret=SECRET)
-    action = await mind.AgentMind(None).act(_make_view(), [])
+    action = await mind.AgentMind(None).act(_make_view(), _msgs())
     assert isinstance(action, cells.Action)
     assert action.type == cells.ACT_EAT
     assert req_captured["ts"] is not None
@@ -394,7 +443,7 @@ async def test_hmac_mismatched_response_secret_returns_none():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="correct-secret")
-    result = await mind.AgentMind(None).act(_make_view(), [])
+    result = await mind.AgentMind(None).act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -408,7 +457,7 @@ async def test_hmac_stale_response_timestamp_returns_none():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="s3cr3t")
-    result = await mind.AgentMind(None).act(_make_view(), [])
+    result = await mind.AgentMind(None).act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -420,7 +469,7 @@ async def test_hmac_missing_response_headers_returns_none():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="s3cr3t")
-    result = await mind.AgentMind(None).act(_make_view(), [])
+    result = await mind.AgentMind(None).act(_make_view(), _msgs())
     assert result is None
     await mind.aclose()
 
@@ -437,7 +486,7 @@ async def test_hmac_batch_signed_round_trip():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret=SECRET)
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out["agent-0"].type == cells.ACT_EAT
     await mind.aclose()
 
@@ -453,6 +502,6 @@ async def test_hmac_batch_bad_response_signature_returns_empty():
 
     transport = httpx.MockTransport(handler)
     mind = HttpMind("bot", "http://test.invalid/act", transport=transport, hmac_secret="correct-secret")
-    out = await mind.act_batch([("agent-0", _make_view())], [])
+    out = await mind.act_batch([("agent-0", _make_view())], _msgs())
     assert out == {}
     await mind.aclose()
