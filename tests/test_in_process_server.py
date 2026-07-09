@@ -193,3 +193,43 @@ async def test_subprocess_server_act_batch():
     assert "agent-2" in out
     assert out["agent-1"] is not None
     assert out["agent-2"] is not None
+
+
+async def test_subprocess_server_mind_receives_messages():
+    """A sandbox="subprocess" mind that calls msg.get_messages()/
+    msg.send_message() must not crash, and must actually see the
+    messages the engine queued for it (#55) -- before this fix, the
+    subprocess received a plain list with neither method."""
+    mind = McpMind(
+        "alice",
+        server_command=[sys.executable, _SERVER_SCRIPT, "tests._messaging_mind_fixture"],
+    )
+    agent = mind.AgentMind(None)
+
+    empty_queue = cells.MessageQueue()
+    result = await agent.act(_make_view(), empty_queue)
+    assert result.type == cells.ACT_SPAWN  # no messages received
+
+    populated_queue = cells.MessageQueue()
+    populated_queue.send_message("hello")
+    populated_queue.update()
+    result = await agent.act(_make_view(), populated_queue)
+    assert result.type == cells.ACT_EAT  # saw the queued message
+
+    await mind.aclose()
+
+
+async def test_subprocess_server_act_batch_mind_receives_messages():
+    mind = McpMind(
+        "alice",
+        server_command=[sys.executable, _SERVER_SCRIPT, "tests._messaging_mind_fixture"],
+    )
+    populated_queue = cells.MessageQueue()
+    populated_queue.send_message("hello")
+    populated_queue.update()
+
+    out = await mind.act_batch(
+        [("agent-1", _make_view())], populated_queue
+    )
+    await mind.aclose()
+    assert out["agent-1"].type == cells.ACT_EAT

@@ -30,6 +30,8 @@ _repo_root = str(pathlib.Path(__file__).resolve().parent.parent)
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+import cells
+
 
 class _Me:
     __slots__ = ("energy", "loaded", "_pos", "_team")
@@ -93,6 +95,23 @@ class _PatchLayer:
         if 0 <= dx < 3 and 0 <= dy < 3:
             return self._patch[dx][dy]
         return None
+
+
+def _message_queue(messages: list) -> cells.MessageQueue:
+    """Build a real cells.MessageQueue from the plain JSON-decoded messages
+    list received over the wire, so existing minds can call
+    msg.get_messages()/msg.send_message() unchanged (#55).
+
+    A mind's send_message() calls land in the queue's inlist and are
+    discarded with it at the end of this request -- there is currently no
+    wire mechanism (#53) for a subprocess-sandboxed mind to broadcast a
+    message back to the engine.
+    """
+    q = cells.MessageQueue()
+    for m in messages:
+        q.send_message(m)
+    q.update()
+    return q
 
 
 class _WorldViewProxy:
@@ -162,16 +181,18 @@ def main():
         nonlocal _default_agent
         if _default_agent is None:
             _default_agent = mind_module.AgentMind([])
-        return _result_to_json(_default_agent.act(_WorldViewProxy(view), messages))
+        msg = _message_queue(messages)
+        return _result_to_json(_default_agent.act(_WorldViewProxy(view), msg))
 
     @server.tool()
     def act_batch(tick: int, agents: list, messages: list) -> dict:
+        msg = _message_queue(messages)
         results = []
         for entry in agents:
             aid = entry["id"]
             if aid not in _agents:
                 _agents[aid] = mind_module.AgentMind([])
-            result = _agents[aid].act(_WorldViewProxy(entry["view"]), messages)
+            result = _agents[aid].act(_WorldViewProxy(entry["view"]), msg)
             results.append({"id": aid, "action": _result_to_json(result)})
         return {"actions": results}
 
