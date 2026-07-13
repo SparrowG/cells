@@ -87,6 +87,14 @@ async def _act_for_agent(agent, view, msg, *, is_disqualified=False, on_strike=N
         agent.pending_task = None
         if fresh is None and fresh_reason is None:
             fresh_reason = "malformed"
+        # This reason belongs to the just-completed (stale) call, not to
+        # whatever happens next in this tick. Record it now — otherwise,
+        # if we go on below to spawn a fresh call that succeeds this same
+        # tick, `fresh is not None` triggers an early return below and
+        # this strike would be silently lost.
+        if fresh is None and fresh_reason is not None and on_strike is not None:
+            on_strike(fresh_reason)
+        fresh_reason = None
 
     if fresh is None and agent.pending_task is None:
         agent.pending_task = asyncio.create_task(

@@ -163,6 +163,118 @@ async def test_recovering_mind_under_generous_threshold(monkeypatch):
     await g._cancel_all_pending()
 
 
+async def test_stale_malformed_completion_not_swallowed_by_fresh_call(monkeypatch):
+    """A call that soft-timeouts and later completes in the background with
+    a malformed (None) result must still count as a strike, even if the
+    *next* tick's fresh call to the same mind succeeds quickly.
+
+    Regression test: _act_for_agent used to detect the stale completion's
+    bad reason ("malformed"/"hard_timeout"/"exception"), then immediately
+    try a fresh call for the current tick. If that fresh call succeeded,
+    the function returned early with the agent's new action — without
+    ever reporting the stale call's reason via on_strike. That silently
+    dropped a strike-worthy event.
+    """
+    monkeypatch.setattr(cells, "SOFT_TIMEOUT_SECONDS", 0.05)
+
+    class FlakyThenFastMind:
+        def __init__(self, cargs):
+            self.calls = 0
+
+        async def act(self, view, msg):
+            self.calls += 1
+            if self.calls == 1:
+                # Sleeps past the soft timeout, then returns a malformed
+                # (None) result once it finally completes in the
+                # background.
+                await asyncio.sleep(0.12)
+                return None
+            # Every later call succeeds immediately.
+            return cells.Action(cells.ACT_EAT)
+
+    g = cells.Game(
+        20,
+        [_module("flaky", FlakyThenFastMind), _module("eat", EatMind)],
+        symmetric=True,
+        max_time=50,
+        headless=True,
+        strike_threshold=100,
+    )
+
+    # Tick 1: spawns the background call; it soft-times-out while still
+    # running, recording one "soft_timeout" strike.
+    await g.tick()
+    assert g.strikes[0] == 1
+
+    # Let the background task actually finish (result: None / malformed)
+    # before the next tick runs.
+    await asyncio.sleep(0.2)
+
+    # Tick 2: the stale task is now done with a malformed result, and a
+    # fresh call for this tick succeeds immediately. Both events happened
+    # and both must be counted.
+    await g.tick()
+
+    reasons = [entry[2] for entry in g.strike_log]
+    assert "malformed" in reasons
+    assert g.strikes[0] == 2
+
+    await g._cancel_all_pending()
+
+
+async def test_stale_and_fresh_failures_in_same_tick_both_count(monkeypatch):
+    """If a stale call resolves badly AND the same tick's freshly-spawned
+    call also fails, both are distinct fallback events and both must be
+    reported — not just the stale one, and not just the fresh one.
+    """
+    monkeypatch.setattr(cells, "SOFT_TIMEOUT_SECONDS", 0.05)
+
+    class DoublyFlakyMind:
+        def __init__(self, cargs):
+            self.calls = 0
+
+        async def act(self, view, msg):
+            self.calls += 1
+            if self.calls == 1:
+                # Sleeps past the soft timeout, then resolves to a
+                # malformed (None) result once it finally completes in
+                # the background.
+                await asyncio.sleep(0.12)
+                return None
+            # The very next call (the fresh call spawned once the stale
+            # one is drained) fails immediately too.
+            raise RuntimeError("boom")
+
+    g = cells.Game(
+        20,
+        [_module("flaky", DoublyFlakyMind), _module("eat", EatMind)],
+        symmetric=True,
+        max_time=50,
+        headless=True,
+        strike_threshold=100,
+    )
+
+    # Tick 1: soft-times-out while the call is still running.
+    await g.tick()
+    assert g.strikes[0] == 1
+
+    # Let the background task actually finish (result: None / malformed)
+    # before the next tick runs.
+    await asyncio.sleep(0.2)
+
+    # Tick 2: the stale task is done (malformed) and the fresh call
+    # spawned for this tick raises immediately (exception). Both are
+    # genuine, distinct fallback events for this tick.
+    await g.tick()
+
+    reasons = [entry[2] for entry in g.strike_log]
+    assert reasons.count("malformed") == 1
+    assert reasons.count("exception") == 1
+    assert g.strikes[0] == 3
+
+    await g._cancel_all_pending()
+
+
 async def test_strike_log_records_tick_and_reason(monkeypatch):
     monkeypatch.setattr(cells, "SOFT_TIMEOUT_SECONDS", 0.05)
 
